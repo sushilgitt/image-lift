@@ -5,7 +5,7 @@ import { getBillingStateCached } from "../billing.server";
 import { getUsage } from "../usage.server";
 import { entitled } from "../plans.server";
 import db from "../db.server";
-import { Page, Button, Badge, Icon } from "@shopify/polaris";
+import { Page, Button, Icon } from "@shopify/polaris";
 import {
   ImageMagicIcon,
   MagicIcon,
@@ -13,9 +13,9 @@ import {
   GaugeIcon,
   PlanIcon,
   ImagesIcon,
-  CheckCircleIcon,
+  CreditCardIcon,
 } from "@shopify/polaris-icons";
-import { BrandMark, Mosaic, PixelMeter } from "../components/Pixels";
+import { LiftMark, RisingBars, RingGauge } from "../components/Brand";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -59,127 +59,127 @@ export default function Index() {
   const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
   const fmt = (n) => Number(n).toLocaleString();
 
-  const autoStatus = !plan.autoOptimizeAllowed
-    ? { label: "Growth plan", tone: "attention" }
-    : autoOptimize
-      ? { label: "Running", tone: "success" }
-      : { label: "Paused", tone: undefined };
+  const autoLabel = !plan.autoOptimizeAllowed ? "Not included" : autoOptimize ? "Active" : "Off";
 
-  const tools = [
+  const features = [
     {
       icon: ImageMagicIcon,
-      title: "Compress",
-      desc: "Re-encode product photos as lean WebP files and swap them in place — same look, a fraction of the weight.",
-      cta: "Start compressing",
+      title: "Image Optimizer",
+      desc: "Convert heavy product photos to lightweight WebP and replace them in place, without changing how they look.",
+      cta: "Optimize images",
       onClick: () => navigate("/app/optimize"),
       available: true,
     },
     {
       icon: MagicIcon,
-      title: "Alt Writer",
-      desc: "AI looks at each product photo and writes descriptive, search-friendly alt text you can apply in bulk.",
-      cta: plan.altText ? "Write alt text" : "Unlock with Starter",
+      title: "AI Alt Text",
+      desc: "Generate descriptive, SEO-friendly alt text from each product photo, then review and apply it in bulk.",
+      cta: plan.altText ? "Generate alt text" : "Upgrade to Starter",
       onClick: () => navigate(plan.altText ? "/app/alt-text" : "/app/plan"),
       available: plan.altText,
-      badge: plan.altText ? undefined : { label: "Starter+", tone: "attention" },
+      lock: plan.altText ? null : "Starter",
     },
     {
       icon: AutomationIcon,
-      title: "Autopilot",
-      desc: "New products get compressed automatically the moment they are created — nothing to remember.",
-      cta: plan.autoOptimizeAllowed ? "Configure" : "Unlock with Growth",
+      title: "Auto-Optimize",
+      desc: "Every new product is optimized automatically in the background as soon as it's created.",
+      cta: plan.autoOptimizeAllowed ? (autoOptimize ? "Manage" : "Turn on") : "Upgrade to Growth",
       onClick: () => navigate(plan.autoOptimizeAllowed ? "/app/optimize" : "/app/plan"),
       available: plan.autoOptimizeAllowed,
-      badge: autoStatus,
+      lock: plan.autoOptimizeAllowed ? null : "Growth",
+      on: plan.autoOptimizeAllowed && autoOptimize,
     },
     {
       icon: GaugeIcon,
-      title: "Speed Lab",
-      desc: "Run live Lighthouse tests on product pages and see exactly how much image weight you have shed.",
-      cta: plan.pageSpeed ? "Open Speed Lab" : "Unlock with Growth",
+      title: "Speed Insights",
+      desc: "Run Lighthouse tests on product pages and see the real weight you've removed, page by page.",
+      cta: plan.pageSpeed ? "View insights" : "Upgrade to Growth",
       onClick: () => navigate(plan.pageSpeed ? "/app/speed" : "/app/plan"),
       available: plan.pageSpeed,
-      badge: plan.pageSpeed ? undefined : { label: "Growth+", tone: "attention" },
+      lock: plan.pageSpeed ? null : "Growth",
     },
   ];
 
   const stats = [
-    { icon: PlanIcon, label: "Plan", value: plan.name },
-    { icon: ImagesIcon, label: "Compressed this month", value: fmt(used) },
-    { icon: CheckCircleIcon, label: "Credits left", value: fmt(remaining) },
-    { icon: AutomationIcon, label: "Autopilot", value: autoStatus.label },
+    { icon: PlanIcon, label: "Current plan", value: plan.name },
+    { icon: ImagesIcon, label: "Optimized this month", value: fmt(used) },
+    { icon: CreditCardIcon, label: "Credits remaining", value: fmt(remaining), tone: remaining === 0 ? "is-warn" : "is-good" },
+    { icon: AutomationIcon, label: "Auto-Optimize", value: autoLabel },
   ];
 
   return (
     <Page>
-      <section className="pp-hero">
-        <div className="pp-hero-main">
-          <p className="pp-kicker"><BrandMark />IMAGE LIFT</p>
+      <section className="il-hero">
+        <RisingBars />
+        <div>
+          <p className="il-eyebrow is-light"><LiftMark size={20} />Image Lift</p>
           <h1>
-            Every pixel, <em>perfectly tuned.</em>
+            Lighter images. <em className="il-grad-text">Faster store.</em>
           </h1>
-          <p className="pp-hero-sub">
-            Shrink product photos to WebP, give every image meaningful alt text, and watch your
-            storefront get quicker — all from one calm dashboard.
+          <p className="il-hero-sub">
+            Optimize product photos, add AI-written alt text and measure real speed gains, all from
+            one focused dashboard.
           </p>
-          <div className="pp-actions">
-            <button type="button" className="pp-btn pp-btn-primary" onClick={() => navigate("/app/optimize")}>
-              Compress images
+          <div className="il-actions">
+            <button type="button" className="il-btn il-btn-primary" onClick={() => navigate("/app/optimize")}>
+              Optimize images
             </button>
-            <button type="button" className="pp-btn pp-btn-outline" onClick={() => navigate("/app/plan")}>
-              View plan
+            <button type="button" className="il-btn il-btn-ghost" onClick={() => navigate("/app/plan")}>
+              Plans &amp; billing
             </button>
           </div>
-          <Mosaic />
         </div>
 
-        <div className="pp-usage-card">
-          <Mosaic />
-          <div>
-            <p className="pp-usage-label">{`${plan.name} · this month`}</p>
-            <p className="pp-usage-big">
-              {fmt(used)}<span>{` / ${fmt(quota)}`}</span>
-            </p>
-            <p className="pp-usage-foot">images compressed</p>
-          </div>
-          <PixelMeter pct={pct} label={`${pct}% of monthly images used`} />
-          <p className="pp-usage-foot">{`${fmt(remaining)} credits left · resets on the 1st`}</p>
+        <div className="il-hero-gauge">
+          <p className="il-hero-gauge-label">{`${plan.name} plan · this month`}</p>
+          <RingGauge pct={pct} label={`${pct}% of monthly image credits used`}>
+            <strong>{`${pct}%`}</strong>
+            <span>{`${fmt(used)} / ${fmt(quota)}`}</span>
+          </RingGauge>
+          <p className="il-hero-gauge-foot">{`${fmt(remaining)} credits left · resets on the 1st`}</p>
         </div>
       </section>
 
-      <div className="pp-stats">
+      <div className="il-strip">
         {stats.map((s) => (
-          <div key={s.label} className="pp-stat">
-            <div className="pp-stat-top">
-              <span className="pp-stat-icon"><Icon source={s.icon} /></span>
-              {s.label}
+          <div key={s.label} className="il-strip-cell">
+            <span className="il-strip-icon"><Icon source={s.icon} /></span>
+            <div style={{ minWidth: 0 }}>
+              <p className="il-strip-label">{s.label}</p>
+              <p className={`il-strip-value${s.tone ? ` ${s.tone}` : ""}`}>{s.value}</p>
             </div>
-            <p className="pp-stat-value">{s.value}</p>
           </div>
         ))}
       </div>
 
-      <p className="pp-section-title"><BrandMark />Tools</p>
-      <div className="pp-tools">
-        {tools.map((t) => (
-          <div key={t.title} className={`pp-tool${t.available ? "" : " pp-tool-locked"}`}>
-            <span className="pp-tool-icon"><Icon source={t.icon} /></span>
-            <div className="pp-tool-body">
-              <div className="pp-tool-head">
-                <p className="pp-tool-title">{t.title}</p>
-                {t.badge && <Badge tone={t.badge.tone}>{t.badge.label}</Badge>}
-              </div>
-              <p className="pp-tool-desc">{t.desc}</p>
-              <div>
-                <Button variant={t.available ? "primary" : "secondary"} onClick={t.onClick}>
-                  {t.cta}
-                </Button>
-              </div>
+      <div className="il-section-head">
+        <p className="il-section-title">Your toolkit</p>
+        <p className="il-section-sub">Everything you need for faster, search-friendly product images</p>
+      </div>
+      <div className="il-features-grid">
+        {features.map((f, i) => (
+          <div key={f.title} className={`il-fcard${f.available ? "" : " is-locked"}`}>
+            <div className="il-fcard-top">
+              <span className="il-fcard-icon"><Icon source={f.icon} /></span>
+              {f.lock ? (
+                <span className="il-pill is-lock">{`${f.lock}+`}</span>
+              ) : f.on ? (
+                <span className="il-pill is-on">Active</span>
+              ) : (
+                <span className="il-fcard-num">{String(i + 1).padStart(2, "0")}</span>
+              )}
+            </div>
+            <p className="il-fcard-title">{f.title}</p>
+            <p className="il-fcard-desc">{f.desc}</p>
+            <div>
+              <Button variant={f.available ? "primary" : "secondary"} onClick={f.onClick}>
+                {f.cta}
+              </Button>
             </div>
           </div>
         ))}
       </div>
-      <div style={{ height: 24 }} />
+      <div style={{ height: 28 }} />
     </Page>
   );
 }

@@ -1,114 +1,127 @@
 .index {
+  position: relative;
+  overflow: hidden;
   min-height: 100vh;
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 20px;
+  padding: 56px 24px;
   box-sizing: border-box;
-  color: #1C1530;
-  font-family: "DM Sans", system-ui, sans-serif;
+  color: #E2E8F0;
+  font-family: "Manrope", system-ui, sans-serif;
+  background: linear-gradient(160deg, #0B1324 0%, #111C33 100%);
+}
+
+.glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   background:
-    radial-gradient(680px 320px at 100% 0%, rgba(168, 85, 247, 0.16), transparent 65%),
-    radial-gradient(620px 300px at 0% 100%, rgba(255, 107, 87, 0.14), transparent 65%),
-    #FBF8F4;
+    radial-gradient(640px 320px at 85% 10%, rgba(45, 212, 191, 0.25), transparent 70%),
+    radial-gradient(520px 300px at 5% 95%, rgba(163, 230, 53, 0.14), transparent 70%);
 }
 
 .content {
+  position: relative;
   display: grid;
-  gap: 20px;
-  max-width: 880px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 48px;
+  max-width: 1080px;
   width: 100%;
-  text-align: center;
 }
+
+.intro { display: grid; gap: 20px; }
 
 .eyebrow {
   margin: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  font: 600 13px/1 "Sora", sans-serif;
-  letter-spacing: 0.08em;
+  font: 600 13px/1 "Space Grotesk", sans-serif;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #7C3AED;
+  color: #2DD4BF;
 }
-
-.mark {
-  display: inline-grid;
-  grid-template-columns: repeat(2, 7px);
-  grid-template-rows: repeat(2, 7px);
-  gap: 2px;
-}
-.mark i { display: block; border-radius: 2px; }
-.mark i:nth-child(1) { background: #7C3AED; }
-.mark i:nth-child(2) { background: #FF6B57; }
-.mark i:nth-child(3) { background: #FFB547; grid-column: 2; }
 
 .heading {
   margin: 0;
-  font-family: "Sora", sans-serif;
-  font-size: clamp(34px, 6vw, 56px);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(38px, 6vw, 64px);
   font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.05;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+  color: #fff;
 }
-.heading em {
-  font-style: normal;
-  background: linear-gradient(120deg, #7C3AED 0%, #A855F7 55%, #FF6B57 100%);
+.heading span {
+  background: linear-gradient(135deg, #2DD4BF 0%, #A3E635 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .text {
-  margin: 0 auto 8px;
-  max-width: 560px;
-  font-size: 16px;
-  line-height: 1.6;
-  color: #6B6478;
+  margin: 0;
+  max-width: 500px;
+  font-size: 17px;
+  line-height: 1.65;
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.note {
+  margin: 0;
+  justify-self: start;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(45, 212, 191, 0.1);
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  color: #99F6E4;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .list {
   list-style: none;
   padding: 0;
-  margin: 24px 0 0;
+  margin: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
 .list > li {
-  text-align: left;
-  padding: 18px;
-  border-radius: 18px;
-  background: #fff;
-  border: 1px solid #ECE6DD;
+  position: relative;
+  padding: 20px 22px 20px 70px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   font-size: 14px;
-  line-height: 1.55;
-  color: #6B6478;
+  line-height: 1.6;
+  color: rgba(226, 232, 240, 0.72);
 }
 
 .list > li strong {
   display: block;
   margin-bottom: 4px;
-  font-family: "Sora", sans-serif;
-  font-size: 16px;
-  color: #1C1530;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 17px;
+  color: #fff;
+}
+
+.num {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font: 700 12px/1 "Space Grotesk", sans-serif;
+  color: #0B1324;
+  background: linear-gradient(135deg, #2DD4BF 0%, #A3E635 100%);
 }
 
 @media only screen and (max-width: 50rem) {
-  .list {
-    grid-template-columns: 1fr;
-  }
-}
-
-.note {
-  margin: 0 auto;
-  padding: 12px 18px;
-  border-radius: 999px;
-  background: #F3EEFF;
-  color: #5B21B6;
-  font-size: 14px;
-  font-weight: 500;
+  .content { grid-template-columns: 1fr; gap: 32px; }
 }

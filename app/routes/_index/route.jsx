@@ -1,5 +1,6 @@
 import { redirect } from "react-router";
 import styles from "./styles.module.css";
+import { LiftMark } from "../../components/Brand";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
@@ -16,33 +17,46 @@ export const loader = async ({ request }) => {
 export default function App() {
   return (
     <div className={styles.index}>
-      <div className={styles.content}>
-        <p className={styles.eyebrow}>
-          <span className={styles.mark} aria-hidden="true"><i /><i /><i /></span>
-          Image Lift
-        </p>
-        <h1 className={styles.heading}>
-          Every pixel, <em>perfectly tuned.</em>
-        </h1>
-        <p className={styles.text}>
-          Compression, AI alt text and speed testing for Shopify product photos — so your store looks
-          sharp and loads fast.
-        </p>
-        <p className={styles.note}>
-          Get Image Lift from the Shopify App Store, then open it from Apps in your Shopify admin.
-        </p>
+      <div className={styles.glow} aria-hidden="true" />
+      <main className={styles.content}>
+        <section className={styles.intro}>
+          <p className={styles.eyebrow}>
+            <LiftMark size={22} />
+            Image Lift
+          </p>
+          <h1 className={styles.heading}>
+            Lighter images.
+            <br />
+            <span>Faster store.</span>
+          </h1>
+          <p className={styles.text}>
+            Image optimization, AI alt text and speed insights for Shopify product photos, so every
+            page loads quicker and ranks better.
+          </p>
+          <p className={styles.note}>
+            Install Image Lift from the Shopify App Store, then open it from Apps in your Shopify admin.
+          </p>
+        </section>
+
         <ul className={styles.list}>
           <li>
-            <strong>Compress</strong> Product photos become lean WebP files, replaced right on the product.
+            <span className={styles.num}>01</span>
+            <strong>Image Optimizer</strong>
+            Photos are converted to lightweight WebP and replaced directly on each product.
           </li>
           <li>
-            <strong>Alt Writer</strong> AI describes each photo so shoppers and search engines know what is in it.
+            <span className={styles.num}>02</span>
+            <strong>AI Alt Text</strong>
+            AI describes every product photo so shoppers and search engines understand it.
           </li>
           <li>
-            <strong>Speed Lab</strong> On-demand Lighthouse tests show how much faster your pages got.
+            <span className={styles.num}>03</span>
+            <strong>Speed Insights</strong>
+            Run Lighthouse tests and see exactly how much weight each page has lost.
           </li>
         </ul>
-      </div>
+      </main>
     </div>
   );
 }
+

@@ -1,5 +1,5 @@
 import PageHeader from "../components/PageHeader";
-import { GaugeIcon } from "@shopify/polaris-icons";
+import { GaugeIcon, PageIcon, ArrowDownIcon, ImageIcon } from "@shopify/polaris-icons";
 import { useState, useCallback, useEffect } from 'react';
 import { useLoaderData, useSubmit, useNavigation, useActionData, redirect } from 'react-router';
 import { authenticate } from '../shopify.server';
@@ -31,7 +31,8 @@ import {
   Badge,
   DataTable,
   Banner,
-  Button
+  Button,
+  Icon
 } from '@shopify/polaris';
 
 // Budget (Shopify caps a query at 1,000 requested points): per product ≈
@@ -280,7 +281,7 @@ export async function action({ request }) {
   // Tier boundary: block report runs for non-entitled plans (defends the action
   // even if the UI were bypassed).
   if (!(await pageSpeedAllowed(admin, session.shop))) {
-    return { error: 'Speed Lab is included with Growth and Pro.' };
+    return { error: 'Speed Insights is available on Growth and Pro plans.' };
   }
   const formData = await request.formData();
   const actionType = formData.get('actionType');
@@ -427,7 +428,7 @@ export default function PageSpeedImpactReports() {
     >
       <Layout>
         <Layout.Section>
-          <PageHeader icon={GaugeIcon} eyebrow="Speed Lab" title="Storefront speed" subtitle="Real weight removed per page, plus on-demand Lighthouse tests" />
+          <PageHeader icon={GaugeIcon} eyebrow="Speed Insights" title="Storefront performance" subtitle="Measured weight savings per page, plus on-demand Lighthouse tests" />
         </Layout.Section>
         {loadError && (
           <Layout.Section>
@@ -445,19 +446,24 @@ export default function PageSpeedImpactReports() {
           </Layout.Section>
         )}
 
-        {/* Stats Banner — measured optimization results */}
+        {/* Stat strip — measured optimization results */}
         <Layout.Section>
-          <Banner tone="info">
-            <BlockStack gap="200">
-              <Text variant="bodyMd" as="p">
-                <strong>{optimizedProducts}</strong> out of <strong>{totalProducts}</strong> product pages have been optimized.
-              </Text>
-              <Text variant="bodyMd" as="p">
-                Measured savings: <strong>{totalSavedMB.toFixed(1)} MB</strong> across <strong>{totalImagesOptimized}</strong> images
-                ({avgCompression.toFixed(0)}% average compression). These figures come from the actual file sizes before and after compression.
-              </Text>
-            </BlockStack>
-          </Banner>
+          <div className="il-strip">
+            {[
+              { icon: PageIcon, label: 'Pages optimized', value: `${optimizedProducts} / ${totalProducts}` },
+              { icon: ArrowDownIcon, label: 'Weight saved', value: `${totalSavedMB.toFixed(1)} MB`, tone: 'is-good' },
+              { icon: ImageIcon, label: 'Images optimized', value: totalImagesOptimized.toLocaleString() },
+              { icon: GaugeIcon, label: 'Avg. size reduction', value: `${avgCompression.toFixed(0)}%`, tone: 'is-good' },
+            ].map(s => (
+              <div key={s.label} className="il-strip-cell">
+                <span className="il-strip-icon"><Icon source={s.icon} /></span>
+                <div style={{ minWidth: 0 }}>
+                  <p className="il-strip-label">{s.label}</p>
+                  <p className={`il-strip-value${s.tone ? ` ${s.tone}` : ''}`}>{s.value}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </Layout.Section>
 
         {/* Live PageSpeed Test */}

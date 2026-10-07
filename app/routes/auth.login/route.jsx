@@ -17,10 +17,10 @@ export default function Auth() {
   return (
     <AppProvider embedded={false}>
       <s-page>
-        <s-section heading="Open Image Lift from Shopify">
+        <s-section heading="Open Image Lift from your Shopify admin">
           <s-paragraph>
-            Image Lift lives inside your Shopify admin. Get it from the Shopify App Store, or
-            open it from Apps in your Shopify admin to continue.
+            Image Lift runs inside Shopify. Install it from the Shopify App Store, or
+            open it from the Apps section of your admin to continue.
           </s-paragraph>
         </s-section>
       </s-page>

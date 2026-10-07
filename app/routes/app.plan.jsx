@@ -12,14 +12,14 @@ import { getUsage } from "../usage.server";
 import { PLAN_TIERS } from "../planCatalog";
 import { Page, Layout, BlockStack, Banner } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { Mosaic, PixelMeter } from "../components/Pixels";
+import { RingGauge, RisingBars } from "../components/Brand";
 
 // Human labels for the entitlement flags, shown as the current plan's inclusions.
 const FEATURE_LABELS = {
-  optimize: "WebP compression",
-  altText: "Alt Writer (AI alt text)",
-  autoOptimize: "Autopilot for new products",
-  pageSpeed: "Speed Lab reports",
+  optimize: "WebP image optimization",
+  altText: "AI Alt Text generator",
+  autoOptimize: "Auto-Optimize new products",
+  pageSpeed: "Speed Insights reports",
 };
 
 export const loader = async ({ request }) => {
@@ -98,83 +98,79 @@ export default function BillingPage() {
     <Page>
       <Layout>
         <Layout.Section>
-          <PageHeader icon={CreditCardIcon} eyebrow="Your account" title="Plan" subtitle="What you're on, how many credits you've used, and what's unlocked" />
+          <PageHeader icon={CreditCardIcon} eyebrow="Account" title="Plans & billing" subtitle="Your current plan, credit usage and the features included" />
         </Layout.Section>
 
         {actionData?.cancelled && !hasActivePlan && (
           <Layout.Section>
-            <Banner title="Plan cancelled" tone="info">
-              Your subscription has ended. Pick a plan whenever you're ready for more credits.
+            <Banner title="Subscription cancelled" tone="info">
+              You're now on the Free plan. Upgrade anytime when you need more credits.
             </Banner>
           </Layout.Section>
         )}
 
         <Layout.Section>
-          <BlockStack gap="400">
-            <div className="pp-plan-card">
-              <Mosaic />
+          <BlockStack gap="500">
+            <div className="il-plan-hero">
+              <RisingBars />
+              <RingGauge pct={pct} size={136} stroke={11} label={`${pct}% of monthly credits used`}>
+                <strong>{`${pct}%`}</strong>
+                <span>used</span>
+              </RingGauge>
               <div>
-                <p className="pp-plan-label">{hasActivePlan ? "Active plan" : "Current plan"}</p>
-                <p className="pp-plan-name">{planName}</p>
-                <p className="pp-plan-sub">{`${fmt(quota)} compression credits every month`}</p>
-                <div className="pp-actions">
-                  <a className="pp-btn pp-btn-white" href={pricingUrl} target="_top">
-                    {hasActivePlan ? "Switch plan" : "Pick a plan"}
+                <p className="il-eyebrow is-light">{hasActivePlan ? "Active subscription" : "Current plan"}</p>
+                <p className="il-plan-name">{planName}</p>
+                <p className="il-plan-sub">
+                  {`${fmt(used)} of ${fmt(quota)} image credits used this month · resets on the 1st`}
+                </p>
+                <div className="il-actions">
+                  <a className="il-btn il-btn-primary" href={pricingUrl} target="_top">
+                    {hasActivePlan ? "Change plan" : "Upgrade plan"}
                   </a>
                   {hasActivePlan && (
-                    <button type="button" className="pp-btn pp-btn-glass" disabled={isBusy} onClick={() => post("cancel")}>
-                      {isBusy ? "Cancelling…" : "Cancel"}
+                    <button type="button" className="il-btn il-btn-ghost" disabled={isBusy} onClick={() => post("cancel")}>
+                      {isBusy ? "Cancelling…" : "Cancel subscription"}
                     </button>
                   )}
                 </div>
               </div>
-              <div className="pp-plan-usage">
-                <p><strong>{fmt(used)}</strong>{` of ${fmt(quota)} used`}</p>
-                <PixelMeter pct={pct} label={`${pct}% of monthly credits used`} />
-                <p>{`${pct}% used · resets on the 1st`}</p>
+            </div>
+
+            <div>
+              <div className="il-section-head" style={{ marginTop: 6 }}>
+                <p className="il-section-title">Compare plans</p>
+                <p className="il-section-sub">Billed through Shopify · changes apply instantly</p>
+              </div>
+              <div className="il-tier-row">
+                {PLAN_TIERS.map((t, i) => (
+                  <div key={t.name} className={`il-tier${i === currentIdx ? " is-current" : ""}`}>
+                    <p className="il-tier-name">
+                      {t.name}
+                      {i === currentIdx && <span className="il-tier-badge">Current</span>}
+                    </p>
+                    <p className="il-tier-price">{`$${t.price.toLocaleString("en-US")}`}<span>/mo</span></p>
+                    <p className="il-tier-meta">{`${t.images} image credits / month`}</p>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className="pp-panel">
-              <p className="pp-panel-title">Unlocked on your plan</p>
-              <div className="pp-features">
+            <div className="il-card">
+              <p className="il-card-title" style={{ marginBottom: 14 }}>Included in your plan</p>
+              <ul className="il-checklist">
                 {Object.entries(FEATURE_LABELS).map(([k, label]) => {
                   const on = included.includes(k);
                   return (
-                    <div key={k} className={`pp-feature${on ? "" : " is-locked"}`}>
-                      <span className="pp-feature-mark" aria-hidden="true">{on ? "✓" : "·"}</span>
+                    <li key={k} className={on ? "" : "is-locked"}>
+                      <span className="il-check" aria-hidden="true">{on ? "✓" : "–"}</span>
                       <span>{label}</span>
-                      {!on && <span className="pp-feature-tag">Locked</span>}
-                    </div>
+                      {!on && <span className="il-pill is-lock il-lock-tag">Upgrade</span>}
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
             </div>
           </BlockStack>
-        </Layout.Section>
-
-        <Layout.Section variant="oneThird">
-          <div className="pp-panel">
-            <p className="pp-panel-title">Compare plans</p>
-            <ul className="pp-tiers">
-              {PLAN_TIERS.map((t, i) => (
-                <li key={t.name} className={i === currentIdx ? "is-current" : i < currentIdx ? "is-below" : ""}>
-                  <span className="pp-tier-pip" aria-hidden="true" />
-                  <div>
-                    <p className="pp-tier-name">
-                      {t.name}
-                      {i === currentIdx && <span className="pp-tier-you">Current</span>}
-                    </p>
-                    <p className="pp-tier-meta">{`${t.images} credits / mo · $${t.price}/mo`}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <p className="pp-side-note" style={{ marginTop: 14 }}>
-              Billing is handled by Shopify and appears on your Shopify invoice. Plan changes show up
-              here automatically.
-            </p>
-          </div>
         </Layout.Section>
       </Layout>
     </Page>

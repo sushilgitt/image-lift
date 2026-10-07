@@ -407,7 +407,7 @@ export default function ImageOptimizationDashboard() {
 
   return (
     <Page
-      title="Compression analytics"
+      title="Optimization analytics"
       subtitle="Measured results from your compression runs"
       primaryAction={{ 
         content: 'Export Report', 
@@ -415,14 +415,14 @@ export default function ImageOptimizationDashboard() {
       }}
       secondaryActions={[
         {
-          content: 'Compress products',
+          content: 'Optimize products',
           url: '/app/optimize'
         }
       ]}
     >
       <Layout>
         <Layout.Section>
-          <PageHeader icon={ChartVerticalIcon} eyebrow="Analytics" title="Compression analytics" subtitle="Weight removed, compression rates and format mix" />
+          <PageHeader icon={ChartVerticalIcon} eyebrow="Analytics" title="Optimization analytics" subtitle="Weight removed, compression rates and format mix" />
         </Layout.Section>
         {loadError && (
           <Layout.Section>

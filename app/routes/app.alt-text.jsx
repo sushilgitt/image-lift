@@ -1,5 +1,5 @@
 import PageHeader from "../components/PageHeader";
-import { MagicIcon } from "@shopify/polaris-icons";
+import { MagicIcon, ProductIcon, ImageIcon, ClockIcon, CheckIcon } from "@shopify/polaris-icons";
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLoaderData, useSubmit, useNavigation, useActionData, useFetcher, redirect } from 'react-router';
 import { authenticate } from '../shopify.server';
@@ -36,7 +36,8 @@ import {
   Banner,
   Select,
   ProgressBar,
-  Pagination
+  Pagination,
+  Icon
 } from '@shopify/polaris';
 
 const PAGE_SIZE = 20;
@@ -167,7 +168,7 @@ export async function action({ request }) {
   const { admin, session } = await authenticate.admin(request);
   // Tier boundary: block alt-text generation for non-entitled (Free) plans.
   if (!(await altTextAllowed(admin, session.shop))) {
-    return { error: 'Alt Writer is included with Starter and above.' };
+    return { error: 'AI Alt Text is available on Starter plans and above.' };
   }
   const formData = await request.formData();
   const actionType = formData.get('actionType');
@@ -648,7 +649,7 @@ export default function AltTextSuggestions() {
     >
       <Layout>
         <Layout.Section>
-          <PageHeader icon={MagicIcon} eyebrow="Alt Writer" title="AI alt text" subtitle="AI reads each product's main photo and writes one caption for all of its images" />
+          <PageHeader icon={MagicIcon} eyebrow="AI Alt Text" title="Generate alt text with AI" subtitle="AI analyzes each product's main photo and writes one descriptive caption for all of its images" />
         </Layout.Section>
         {error && (
           <Layout.Section>
@@ -676,27 +677,34 @@ export default function AltTextSuggestions() {
         )}
 
         <Layout.Section>
+          <div className="il-strip">
+            {[
+              { icon: ProductIcon, label: 'Products', value: productCount },
+              { icon: ImageIcon, label: 'Images', value: totalImages },
+              { icon: ClockIcon, label: 'Awaiting review', value: pendingCount, tone: pendingCount > 0 ? 'is-warn' : undefined },
+              { icon: CheckIcon, label: 'Applied', value: appliedCount, tone: 'is-good' },
+            ].map(s => (
+              <div key={s.label} className="il-strip-cell">
+                <span className="il-strip-icon"><Icon source={s.icon} /></span>
+                <div style={{ minWidth: 0 }}>
+                  <p className="il-strip-label">{s.label}</p>
+                  <p className={`il-strip-value${s.tone ? ` ${s.tone}` : ''}`}>{s.value.toLocaleString()}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Layout.Section>
+
+        <Layout.Section>
           <Card>
             <BlockStack gap="500">
-              <InlineStack align="space-between" blockAlign="center">
-                <InlineStack gap="800">
-                  <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">Products</Text>
-                    <Text variant="heading2xl" as="h2">{productCount}</Text>
-                  </BlockStack>
-                  <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">Photos</Text>
-                    <Text variant="heading2xl" as="h2">{totalImages}</Text>
-                  </BlockStack>
-                  <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">To review</Text>
-                    <Text variant="heading2xl" as="h2">{pendingCount}</Text>
-                  </BlockStack>
-                  <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">Applied</Text>
-                    <Text variant="heading2xl" as="h2" tone="success">{appliedCount}</Text>
-                  </BlockStack>
-                </InlineStack>
+              <InlineStack align="space-between" blockAlign="center" gap="300">
+                <BlockStack gap="100">
+                  <Text variant="headingMd" as="h2">Suggestions</Text>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    Generate captions for selected products (or all of them), edit if needed, then apply.
+                  </Text>
+                </BlockStack>
                 <InlineStack gap="300" blockAlign="end">
                   <Box minWidth="220px">
                     <Select
@@ -708,8 +716,8 @@ export default function AltTextSuggestions() {
                   </Box>
                   <Button onClick={generateSuggestions} loading={isGenerating} disabled={isGenerating}>
                     {isGenerating
-                      ? `Writing ${genProgress.done}/${genProgress.total}…`
-                      : 'Write suggestions'}
+                      ? `Generating ${genProgress.done}/${genProgress.total}…`
+                      : 'Generate with AI'}
                   </Button>
                   {selectedImages.length > 0 && (
                     <Button
@@ -740,7 +748,7 @@ export default function AltTextSuggestions() {
               <Divider />
 
               <Checkbox
-                label="Select everything to review"
+                label="Select all awaiting review"
                 checked={selectedImages.length === images.filter(img => img.status === 'pending').length && images.filter(img => img.status === 'pending').length > 0}
                 onChange={handleSelectAll}
               />
@@ -775,14 +783,14 @@ export default function AltTextSuggestions() {
                             <InlineStack align="space-between">
                               <Box width="65%">
                                 <BlockStack gap="200">
-                                  <Text variant="bodySm" as="p" fontWeight="semibold">Alt text today</Text>
+                                  <Text variant="bodySm" as="p" fontWeight="semibold">Current alt text</Text>
                                   <Text variant="bodyMd" as="p" tone={image.currentAlt ? undefined : 'subdued'}>
                                     {image.currentAlt || 'No alt text'}
                                   </Text>
                                 </BlockStack>
                               </Box>
                               <BlockStack gap="200" inlineAlign="end">
-                                <Text variant="bodySm" as="p" tone="subdued">Search score</Text>
+                                <Text variant="bodySm" as="p" tone="subdued">SEO score</Text>
                                 <Badge tone={getSeoScoreStatus(image.seoScore)}>{image.seoScore}%</Badge>
                               </BlockStack>
                             </InlineStack>
@@ -791,7 +799,7 @@ export default function AltTextSuggestions() {
 
                             <BlockStack gap="300">
                               <InlineStack gap="200" blockAlign="center">
-                                <Text variant="bodySm" as="p" fontWeight="semibold">Suggested by Alt Writer</Text>
+                                <Text variant="bodySm" as="p" fontWeight="semibold">AI suggestion</Text>
                                 <Text variant="bodySm" as="span" tone="subdued">(applied to all {image.imageCount} images)</Text>
                                 {image.status === 'applied' && <Badge tone="success">Applied</Badge>}
                               </InlineStack>
@@ -801,7 +809,7 @@ export default function AltTextSuggestions() {
                                 disabled={image.status === 'applied'}
                                 multiline={2}
                                 autoComplete="off"
-                                placeholder="Press 'Write suggestions' and Alt Writer will describe this photo…"
+                                placeholder="Click 'Generate with AI' to describe this photo…"
                               />
                             </BlockStack>
 

@@ -460,7 +460,7 @@ export async function optimizeBatch(admin, productId, opts = {}) {
   if (total === 0) {
     return { success: true, productId, total: 0, optimized: 0, remaining: 0, advanced: false, done: true,
       score: 0, sizeSavedMB: 0, originalSizeMB: 0, optimizedSizeMB: 0, compressionRate: 0,
-      message: "No photos to compress" };
+      message: "No images to optimize" };
   }
 
   const pending = images.filter(img => !doneIds.has(img.id.split("/").pop()));
@@ -474,7 +474,7 @@ export async function optimizeBatch(admin, productId, opts = {}) {
       advanced: false, done: false, quotaExceeded: true,
       score: total > 0 ? Math.round((processedNow / total) * 100) : 0,
       sizeSavedMB: 0, originalSizeMB: 0, optimizedSizeMB: 0, compressionRate: 0,
-      message: "Monthly credits used up",
+      message: "Monthly image credits used",
     };
   }
 
@@ -595,7 +595,7 @@ export async function optimizeBatch(admin, productId, opts = {}) {
       : 0,
     batchFailures: batch.length - newRecords.length,
     message: remaining === 0
-      ? `Compressed "${product.title}" — ${processed}/${total} photos`
-      : `Compressing "${product.title}" — ${processed}/${total} photos`,
+      ? `Optimized "${product.title}" — ${processed}/${total} images`
+      : `Optimizing "${product.title}" — ${processed}/${total} images`,
   };
 }
