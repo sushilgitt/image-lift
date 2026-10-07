@@ -18,6 +18,9 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.glow} aria-hidden="true" />
+      <svg className={styles.sparkle} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 0c.9 6.4 5.6 11.1 12 12-6.4.9-11.1 5.6-12 12-.9-6.4-5.6-11.1-12-12C6.4 11.1 11.1 6.4 12 0z" fill="currentColor" />
+      </svg>
       <main className={styles.content}>
         <section className={styles.intro}>
           <p className={styles.eyebrow}>

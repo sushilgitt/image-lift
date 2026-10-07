@@ -1,5 +1,6 @@
 // Image Lift brand primitives: the rising-bars logo mark, a decorative
-// ascending-bars graphic, a circular usage gauge and a smooth linear meter.
+// ascending-bars graphic, a four-point sparkle accent, a circular usage gauge
+// and a smooth linear meter.
 
 export function LiftMark({ size = 22 }) {
   return (
@@ -8,9 +9,8 @@ export function LiftMark({ size = 22 }) {
       <path d="M7 16.5v-3M12 16.5v-6.5M17 16.5V7.5" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
       <defs>
         <linearGradient id="il-mark-grad" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#0F766E" />
-          <stop offset="0.55" stopColor="#14B8A6" />
-          <stop offset="1" stopColor="#84CC16" />
+          <stop stopColor="#1A23B8" />
+          <stop offset="1" stopColor="#4C5BFF" />
         </linearGradient>
       </defs>
     </svg>
@@ -30,6 +30,17 @@ export function RisingBars({ className = "" }) {
   );
 }
 
+// Four-point sparkle used as a corner accent on blue hero surfaces.
+export function Sparkle({ size = 28, style }) {
+  return (
+    <span className="il-sparkle" style={style} aria-hidden="true">
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <path d="M12 0c.9 6.4 5.6 11.1 12 12-6.4.9-11.1 5.6-12 12-.9-6.4-5.6-11.1-12-12C6.4 11.1 11.1 6.4 12 0z" fill="currentColor" />
+      </svg>
+    </span>
+  );
+}
+
 // Circular gauge. `pct` is 0–100; children render in the centre.
 export function RingGauge({ pct = 0, size = 148, stroke = 12, label, children }) {
   const clamped = Math.min(100, Math.max(0, pct));
@@ -41,8 +52,8 @@ export function RingGauge({ pct = 0, size = 148, stroke = 12, label, children })
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <defs>
           <linearGradient id="il-ring-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#2DD4BF" />
-            <stop offset="1" stopColor="#A3E635" />
+            <stop offset="0" stopColor="#FFFFFF" />
+            <stop offset="1" stopColor="#A9B6FF" />
           </linearGradient>
         </defs>
         <circle className="il-ring-track" cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} fill="none" />

@@ -1,5 +1,5 @@
 import { PLAN_TIERS } from "../planCatalog";
-import { LiftMark, RisingBars } from "./Brand";
+import { LiftMark, RisingBars, Sparkle } from "./Brand";
 
 // Plan comparison used by the standalone pricing page. Presentational only:
 // every plan CTA is a real top-frame link (`target="_top"`) to Shopify's hosted
@@ -14,10 +14,12 @@ export default function PricingTiers({ pricingUrl }) {
   return (
     <div className="il-pricing">
       <RisingBars />
+      <Sparkle size={34} style={{ right: "8%", top: 48 }} />
+      <Sparkle size={18} style={{ left: "10%", top: 120, opacity: 0.5 }} />
       <header className="il-pricing-head">
         <p className="il-eyebrow is-light"><LiftMark size={20} />Image Lift plans</p>
         <h1>
-          Faster pages, <em className="il-grad-text">priced for your catalog.</em>
+          Faster pages,<br /><em className="il-grad-text">priced for your catalog.</em>
         </h1>
         <p>
           Optimize product photos, generate alt text and track storefront speed. Start free and

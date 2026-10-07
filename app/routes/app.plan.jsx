@@ -12,7 +12,7 @@ import { getUsage } from "../usage.server";
 import { PLAN_TIERS } from "../planCatalog";
 import { Page, Layout, BlockStack, Banner } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { RingGauge, RisingBars } from "../components/Brand";
+import { RingGauge, RisingBars, Sparkle } from "../components/Brand";
 
 // Human labels for the entitlement flags, shown as the current plan's inclusions.
 const FEATURE_LABELS = {
@@ -113,6 +113,7 @@ export default function BillingPage() {
           <BlockStack gap="500">
             <div className="il-plan-hero">
               <RisingBars />
+              <Sparkle size={24} style={{ right: 26, top: 22 }} />
               <RingGauge pct={pct} size={136} stroke={11} label={`${pct}% of monthly credits used`}>
                 <strong>{`${pct}%`}</strong>
                 <span>used</span>

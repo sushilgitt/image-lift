@@ -15,7 +15,7 @@ import {
   ImagesIcon,
   CreditCardIcon,
 } from "@shopify/polaris-icons";
-import { LiftMark, RisingBars, RingGauge } from "../components/Brand";
+import { LiftMark, RisingBars, RingGauge, Sparkle } from "../components/Brand";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -111,10 +111,12 @@ export default function Index() {
     <Page>
       <section className="il-hero">
         <RisingBars />
+        <Sparkle size={26} style={{ right: 22, bottom: 18 }} />
+        <Sparkle size={14} style={{ left: "44%", top: 26, opacity: 0.6 }} />
         <div>
           <p className="il-eyebrow is-light"><LiftMark size={20} />Image Lift</p>
           <h1>
-            Lighter images. <em className="il-grad-text">Faster store.</em>
+            Lighter images.<br /><em className="il-grad-text">Faster store.</em>
           </h1>
           <p className="il-hero-sub">
             Optimize product photos, add AI-written alt text and measure real speed gains, all from
