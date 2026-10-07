@@ -43,7 +43,7 @@ async function runAutoOptimize(shop, productGid) {
   // Offline admin client (uses the stored offline access token for the shop).
   const { admin } = await unauthenticated.admin(shop);
 
-  const { plan } = await getBillingState(admin);
+  const { plan } = await getBillingState(admin, shop);
   if (!entitled(plan, "autoOptimize")) return; // plan changed since toggle was set
   const genAlt = entitled(plan, "altText"); // Growth/Pro always include alt text
 

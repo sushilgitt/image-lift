@@ -104,20 +104,6 @@ export function managedPricingUrl(shop, appHandle) {
   return `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle || FALLBACK_APP_HANDLE}/pricing_plans`;
 }
 
-// App Bridge intercepts a 401 carrying this header and navigates the TOP frame
-// to the URL — the only reliable way to leave the embedded iframe to an
-// admin.shopify.com page (window.top.location is a cross-origin SecurityError).
-export function appBridgeRedirect(url) {
-  return new Response(null, {
-    status: 401,
-    headers: new Headers({
-      "X-Shopify-API-Request-Failure-Reauthorize-Url": url,
-      "Access-Control-Expose-Headers":
-        "X-Shopify-API-Request-Failure-Reauthorize-Url",
-    }),
-  });
-}
-
 // Attempts an in-app cancel via appSubscriptionCancel. Returns the cancelled
 // subscription on success; throws on userErrors (caller falls back to sending
 // the merchant to the hosted pricing page to cancel there).

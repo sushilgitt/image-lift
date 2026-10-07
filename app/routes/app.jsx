@@ -3,7 +3,7 @@ import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
-import { authenticate, sessionStorage } from "../shopify.server";
+import { authenticate } from "../shopify.server";
 import { getBillingStateCached } from "../billing.server";
 import { entitled } from "../plans.server";
 
@@ -11,10 +11,12 @@ import "@shopify/polaris/build/esm/styles.css";
 
 import enTranslations from "@shopify/polaris/locales/en.json";
 
-function isExpiredToken(e) {
-  return e?.response?.networkStatusCode === 403 || String(e?.message).includes('Forbidden');
-}
-
+// Authentication is session-token based end to end: authenticate.admin uses
+// token exchange (the App Bridge id_token on document loads, the
+// `Authorization: Bearer <session token>` header that App Bridge adds to every
+// fetch). When a token is missing or expired the library answers with its own
+// bounce page / 401 + retry header, which App Bridge handles inside the admin,
+// so the app never needs to leave the iframe or run the legacy OAuth flow.
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
 
@@ -31,22 +33,9 @@ export const loader = async ({ request }) => {
       altText: entitled(state.plan, "altText"),
     };
   } catch (e) {
-    // Propagate redirect Responses (e.g. OAuth flow initiated by the library),
-    // but treat 4xx Responses as an expired/revoked token — trigger re-auth
-    // instead of letting a raw 403 reach the browser and crash React hydration.
-    if (e instanceof Response) {
-      if (e.status >= 300 && e.status < 400) throw e;
-      await sessionStorage.deleteSession(session.id);
-      // eslint-disable-next-line no-undef
-      return { apiKey: process.env.SHOPIFY_API_KEY || "", needsReauth: true, shop: session.shop };
-    }
-    // Expired token via a plain Error object (networkStatusCode === 403 etc.)
-    if (isExpiredToken(e)) {
-      await sessionStorage.deleteSession(session.id);
-      // eslint-disable-next-line no-undef
-      return { apiKey: process.env.SHOPIFY_API_KEY || "", needsReauth: true, shop: session.shop };
-    }
-    // Any other billing error: fall back to the Free tier defaults.
+    // Auth Responses (bounce / re-auth) come from the library — let them
+    // through. Any other billing error falls back to the Free tier defaults.
+    if (e instanceof Response) throw e;
   }
 
   // eslint-disable-next-line no-undef
@@ -56,17 +45,32 @@ export const loader = async ({ request }) => {
   };
 };
 
-export default function App() {
-  const { apiKey, needsReauth, shop, features } = useLoaderData();
-
-  // Expired token: break out of the Shopify iframe so OAuth runs in the top frame
+// Fetches a fresh session token from App Bridge and calls an authenticated
+// endpoint with it, so session-token authentication is exercised explicitly
+// on every app load (in addition to App Bridge's automatic fetch header).
+function useSessionTokenPing() {
   useEffect(() => {
-    if (needsReauth && shop) {
-      window.top.location.href = `/auth?shop=${shop}`;
-    }
-  }, [needsReauth, shop]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await window.shopify?.idToken?.();
+        if (!token || cancelled) return;
+        await fetch("/api/session", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        /* non-critical: page data already loaded via App Bridge */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+}
 
-  if (needsReauth) return null;
+export default function App() {
+  const { apiKey, features } = useLoaderData();
+  useSessionTokenPing();
 
   return (
     <ShopifyAppProvider embedded apiKey={apiKey}>

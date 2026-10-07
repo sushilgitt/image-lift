@@ -1,11 +1,11 @@
 import PageHeader from "../components/PageHeader";
 import { CreditCardIcon } from "@shopify/polaris-icons";
+import { useEffect } from "react";
 import { useLoaderData, useSubmit, useNavigation, useActionData } from "react-router";
 import { authenticate } from "../shopify.server";
 import {
   getBillingState,
   managedPricingUrl,
-  appBridgeRedirect,
   cancelSubscription,
 } from "../billing.server";
 import { getUsage } from "../usage.server";
@@ -55,7 +55,7 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const actionType = formData.get("actionType");
 
-  const state = await getBillingState(admin);
+  const state = await getBillingState(admin, session.shop);
   const pricingUrl = managedPricingUrl(session.shop, state.appHandle);
 
   // Cancel: try the in-app cancel mutation first; if managed pricing blocks it,
@@ -67,8 +67,10 @@ export const action = async ({ request }) => {
       await cancelSubscription(admin, sub.id);
       return { cancelled: true };
     } catch (e) {
-      console.error("[BILLING] in-app cancel failed, redirecting:", e?.message);
-      throw appBridgeRedirect(pricingUrl);
+      // Managed pricing can block in-app cancels; send the merchant to
+      // Shopify's hosted plan page instead (navigated client-side below).
+      console.error("[BILLING] in-app cancel failed, sending to pricing page:", e?.message);
+      return { cancelled: false, openPricing: pricingUrl };
     }
   }
 
@@ -81,6 +83,12 @@ export default function BillingPage() {
   const navigation = useNavigation();
   const submit = useSubmit();
   const isBusy = navigation.state !== "idle";
+
+  // App Bridge turns a _top window.open into an admin navigation, so the
+  // merchant stays inside the Shopify admin.
+  useEffect(() => {
+    if (actionData?.openPricing) window.open(actionData.openPricing, "_top");
+  }, [actionData]);
 
   const post = (actionType) => {
     const fd = new FormData();
