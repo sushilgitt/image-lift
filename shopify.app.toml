@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "e4a65c6d994da7ae5cde6be1b4a8a0fa"
+client_id = "b92477b04e7e6dccc1fa2cc75895bfd1"
 name = "Image Lift"
 application_url = "https://imagelift.173.212.233.194.sslip.io"
 embedded = true
