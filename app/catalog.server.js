@@ -59,11 +59,18 @@ export function parseSummary(product) {
 /*  The optimizer page's catalog                                              */
 /* -------------------------------------------------------------------------- */
 
+// The catalog lists 20 images per product instead of MAX_MEDIA_PER_PRODUCT (40)
+// so products can page at 20 per request instead of 10 — the pagination is
+// sequential, so page size is the whole latency of this fetch. The listing cap
+// only affects the shown alt-text tally and the pre-optimization size estimate
+// of 20+-image products; the optimizer itself still processes every image, and
+// once a product has a summary its real totals replace the estimate.
 // Budget (Shopify caps a query at 1,000 requested points): per product ≈
-// 1 + featuredMedia 3 + media(2 + 40×2) + summary 1 = 87, × 10 products ≈ 875.
+// 1 + featuredMedia 3 + media(2 + 20×2) + summary 1 = 47, × 20 products ≈ 942.
+const OPTIMIZER_MEDIA_PER_PRODUCT = 20;
 const PRODUCTS_QUERY = `#graphql
   query OptimizerProducts($cursor: String) {
-    products(first: 10, after: $cursor) {
+    products(first: 20, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
@@ -71,7 +78,7 @@ const PRODUCTS_QUERY = `#graphql
         handle
         status
         featuredMedia { preview { image { url } } }
-        media(first: ${MAX_MEDIA_PER_PRODUCT}) {
+        media(first: ${OPTIMIZER_MEDIA_PER_PRODUCT}) {
           nodes { ... on MediaImage { id alt image { url } } }
         }
         summary: metafield(namespace: "image_optimization", key: "optimization_summary") { value }

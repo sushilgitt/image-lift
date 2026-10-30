@@ -16,6 +16,16 @@ import { buildCatalog } from '../catalog.server';
  * cheap: refreshing the usage meter after a run no longer re-fetches the whole
  * catalog.
  */
+// React Router revalidates mounted fetcher.load() data after EVERY fetcher
+// action by default — which re-ran this multi-second catalog build after each
+// optimize batch. The page refreshes the catalog explicitly (refreshCatalog)
+// when a run finishes, so the automatic per-batch revalidations are pure waste
+// and compete with the optimizer for Shopify API rate limit.
+export function shouldRevalidate({ formMethod, defaultShouldRevalidate }) {
+  if (formMethod && formMethod.toUpperCase() !== 'GET') return false;
+  return defaultShouldRevalidate;
+}
+
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   // A plain object, not a hand-rolled Response: the page reads this with
