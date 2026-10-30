@@ -11,7 +11,7 @@
 // with images still pending.
 import sharp from "sharp";
 import { setDefaultResultOrder } from "node:dns";
-import { incrementUsage } from "./usage.server";
+import { incrementUsage, reserveImages, refundImages } from "./usage.server";
 import db from "./db.server";
 
 /* -------------------------------------------------------------------------- */
@@ -157,10 +157,55 @@ export async function optimizeImage(imageUrl) {
   throw lastErr;
 }
 
-// Upload the optimized buffer via a Shopify staged upload and register it as a
-// new file (MediaImage). Returns the new MediaImage gid. The file is NOT yet on
-// the product — finalizeReplacements attaches it once Shopify has processed it.
-export async function uploadOptimizedImage(admin, optimizedBuffer, altText) {
+/* -------------------------------------------------------------------------- */
+/*  Per-product media mutation lock                                          */
+/* -------------------------------------------------------------------------- */
+
+// Shopify locks a product's media while a mutation on it is in flight, and
+// rejects a second concurrent one with "Media cannot be modified at this
+// moment because it is currently being modified by another operation". Several
+// images of the SAME product can be optimizing at once, so their
+// productCreateMedia / productDeleteMedia calls would collide without this —
+// images failed mid-run and only succeeded on a re-click.
+//
+// The expensive work (download + WebP encode, and the staged upload) stays
+// parallel; only the media MUTATION needs to be serialized, and only against
+// other mutations on the same product. This is a per-productId promise chain:
+// a mutation waits for the previous one on that product to finish, then runs.
+const productMediaChains = new Map(); // productId -> Promise (tail of the chain)
+
+function withProductMediaLock(productId, task) {
+  const prev = productMediaChains.get(productId) || Promise.resolve();
+  // Run `task` after the previous holder settles, whether it resolved or threw
+  // — one image's failure must not wedge the rest of the product's queue.
+  const run = prev.then(task, task);
+  // The stored tail swallows errors so the chain never rejects; callers still
+  // see the real result/rejection through `run`.
+  const tail = run.then(() => {}, () => {});
+  productMediaChains.set(productId, tail);
+  // Drop the map entry once this product's queue drains, so the Map can't grow
+  // without bound across a large catalog — but only if no newer mutation has
+  // already replaced the tail.
+  tail.finally(() => {
+    if (productMediaChains.get(productId) === tail) productMediaChains.delete(productId);
+  });
+  return run;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Swapping an original for its optimized copy                              */
+/* -------------------------------------------------------------------------- */
+
+// Upload the optimized buffer and swap it in for `oldMediaId` on the product,
+// keeping variant images and position intact.
+//
+// This used to go through fileCreate, then POLL for up to 30s until the file
+// left PROCESSING, then fileUpdate to attach/detach references — that poll
+// was most of the latency a merchant felt per image. productCreateMedia
+// attaches directly to the product in its own response, so there is nothing
+// to wait for; the file still finishes encoding in the background exactly
+// like any image a merchant uploads by hand.
+export async function uploadAndReplaceImage(admin, productId, oldMediaId, optimizedBuffer, altText, { targetPosition } = {}) {
   const isWebP = optimizedBuffer[8] === 0x57 && optimizedBuffer[9] === 0x45;
   const mimeType = isWebP ? "image/webp" : "image/jpeg";
   const filename = `imagelift-${Date.now()}.${isWebP ? "webp" : "jpg"}`;
@@ -198,182 +243,106 @@ export async function uploadOptimizedImage(admin, optimizedBuffer, altText) {
   const uploadRes = await timedFetch(target.url, { method: "POST", body: form }, 40000);
   if (!uploadRes.ok) throw new Error(`Staged upload HTTP ${uploadRes.status}`);
 
-  const fileRes = await admin.graphql(
-    `#graphql
-      mutation CreateOptimizedFile($files: [FileCreateInput!]!) {
-        fileCreate(files: $files) {
-          files { id }
-          userErrors { field message }
-        }
-      }`,
-    {
-      variables: {
-        files: [{ alt: altText, contentType: "IMAGE", originalSource: target.resourceUrl, filename }],
-      },
-    }
-  );
-  const fileData = await fileRes.json();
-  const fileErr = fileData.errors?.[0]?.message || fileData.data?.fileCreate?.userErrors?.[0]?.message;
-  if (fileErr) throw new Error(fileErr);
-  const newFile = fileData.data?.fileCreate?.files?.[0];
-  if (!newFile) throw new Error("Failed to create optimized file");
-
-  return newFile.id;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Swapping originals for optimized copies without disturbing the product    */
-/* -------------------------------------------------------------------------- */
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Poll until every new MediaImage leaves PROCESSING (or the timeout passes).
-// Returns { ready: Set<id>, failed: Set<id> }. Files must be READY before
-// fileUpdate can attach them to a product.
-async function waitForMediaReady(admin, ids, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  let pending = [...ids];
-  const ready = new Set();
-  const failed = new Set();
-  while (pending.length > 0 && Date.now() < deadline) {
-    const res = await admin.graphql(
+  // Everything above targets a storage bucket, not the product, so it runs in
+  // parallel across a product's images. The mutations below DO touch the
+  // product's media, so they go through the lock.
+  return withProductMediaLock(productId, async () => {
+    const mediaRes = await admin.graphql(
       `#graphql
-        query MediaStatus($ids: [ID!]!) {
-          nodes(ids: $ids) { ... on MediaImage { id status } }
-        }`,
-      { variables: { ids: pending } }
-    );
-    const json = await res.json();
-    const nodes = json.data?.nodes || [];
-    pending = [];
-    for (const n of nodes) {
-      if (!n?.id) continue;
-      if (n.status === "READY") ready.add(n.id);
-      else if (n.status === "FAILED") failed.add(n.id);
-      else pending.push(n.id);
-    }
-    if (pending.length > 0) await sleep(1000);
-  }
-  // Still processing after the timeout: give up on those copies this round.
-  for (const id of pending) failed.add(id);
-  return { ready, failed };
-}
-
-// fileUpdate wrapper; returns the first error message, or null on success.
-async function updateFiles(admin, files) {
-  if (files.length === 0) return null;
-  const res = await admin.graphql(
-    `#graphql
-      mutation UpdateFileRefs($files: [FileUpdateInput!]!) {
-        fileUpdate(files: $files) {
-          files { id }
-          userErrors { field message }
-        }
-      }`,
-    { variables: { files } }
-  );
-  const json = await res.json();
-  return json.errors?.[0]?.message || json.data?.fileUpdate?.userErrors?.[0]?.message || null;
-}
-
-async function deleteFiles(admin, fileIds) {
-  if (fileIds.length === 0) return;
-  await admin.graphql(
-    `#graphql
-      mutation DeleteUnusedCopies($fileIds: [ID!]!) {
-        fileDelete(fileIds: $fileIds) { deletedFileIds }
-      }`,
-    { variables: { fileIds } }
-  );
-}
-
-// Replace each original with its optimized copy while keeping the product
-// exactly as the merchant arranged it:
-//   1. wait for Shopify to process the copies; discard any that fail (the
-//      original stays on the product untouched),
-//   2. attach the copies to the product,
-//   3. point variants that used an original at its copy,
-//   4. detach the originals from this product only — the original files stay
-//      in Content › Files (a backup, and still intact anywhere else they're used),
-//   5. move each copy into its original's position (restores order + featured image).
-// `replacements` is [{ oldId, newId }]; `mediaOrder` is every media id on the
-// product (images, videos, models) in its original order.
-// Returns the Set of oldIds whose replacement was abandoned.
-async function finalizeReplacements(admin, productId, replacements, mediaOrder) {
-  const abandoned = new Set();
-  if (replacements.length === 0) return abandoned;
-
-  const { failed } = await waitForMediaReady(admin, replacements.map((r) => r.newId));
-  let good = replacements.filter((r) => !failed.has(r.newId));
-  for (const r of replacements) if (failed.has(r.newId)) abandoned.add(r.oldId);
-
-  const attachErr = await updateFiles(admin, good.map((r) => ({ id: r.newId, referencesToAdd: [productId] })));
-  if (attachErr) {
-    // Couldn't attach the copies — leave the product exactly as it was.
-    console.error(`[OPTIMIZE] attach copies to ${productId}:`, attachErr);
-    for (const r of good) abandoned.add(r.oldId);
-    good = [];
-  }
-  await deleteFiles(admin, replacements.filter((r) => abandoned.has(r.oldId)).map((r) => r.newId));
-  if (good.length === 0) return abandoned;
-
-  // Variants whose image is being replaced. Budget: 1 + variants(2 + 100 × 4) ≈ 403.
-  const newIdFor = new Map(good.map((r) => [r.oldId, r.newId]));
-  const varRes = await admin.graphql(
-    `#graphql
-      query VariantMedia($id: ID!) {
-        product(id: $id) {
-          variants(first: 100) { nodes { id media(first: 1) { nodes { id } } } }
-        }
-      }`,
-    { variables: { id: productId } }
-  );
-  const varJson = await varRes.json();
-  const variantMedia = (varJson.data?.product?.variants?.nodes || [])
-    .map((v) => ({ variantId: v.id, oldId: v.media?.nodes?.[0]?.id }))
-    .filter((v) => v.oldId && newIdFor.has(v.oldId))
-    .map((v) => ({ variantId: v.variantId, mediaIds: [newIdFor.get(v.oldId)] }));
-  if (variantMedia.length > 0) {
-    const res = await admin.graphql(
-      `#graphql
-        mutation AttachVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
-          productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
-            userErrors { field message }
-          }
-        }`,
-      { variables: { productId, variantMedia } }
-    );
-    const json = await res.json();
-    const err = json.errors?.[0]?.message || json.data?.productVariantAppendMedia?.userErrors?.[0]?.message;
-    if (err) console.error(`[OPTIMIZE] variant media for ${productId}:`, err);
-  }
-
-  const detachErr = await updateFiles(admin, good.map((r) => ({ id: r.oldId, referencesToRemove: [productId] })));
-  if (detachErr) console.error(`[OPTIMIZE] detach originals from ${productId}:`, detachErr);
-
-  // Copies were appended at the end; move each into its original's slot.
-  // Applying moves in ascending target order lands every copy correctly.
-  const moves = good
-    .map((r) => ({ id: r.newId, newPosition: mediaOrder.indexOf(r.oldId) }))
-    .filter((m) => m.newPosition >= 0)
-    .sort((a, b) => a.newPosition - b.newPosition)
-    .map((m) => ({ id: m.id, newPosition: String(m.newPosition) }));
-  if (moves.length > 0) {
-    const res = await admin.graphql(
-      `#graphql
-        mutation RestoreMediaOrder($id: ID!, $moves: [MoveInput!]!) {
-          productReorderMedia(id: $id, moves: $moves) {
+        mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+          productCreateMedia(productId: $productId, media: $media) {
+            media { ... on MediaImage { id } }
             mediaUserErrors { field message }
           }
         }`,
-      { variables: { id: productId, moves } }
+      {
+        variables: {
+          productId,
+          media: [{ alt: altText, mediaContentType: "IMAGE", originalSource: target.resourceUrl }],
+        },
+      }
     );
-    const json = await res.json();
-    const err = json.errors?.[0]?.message || json.data?.productReorderMedia?.mediaUserErrors?.[0]?.message;
-    if (err) console.error(`[OPTIMIZE] reorder media for ${productId}:`, err);
-  }
+    const mediaData = await mediaRes.json();
+    if (mediaData.data?.productCreateMedia?.mediaUserErrors?.length > 0) {
+      throw new Error(mediaData.data.productCreateMedia.mediaUserErrors[0].message);
+    }
+    const newMedia = mediaData.data?.productCreateMedia?.media?.[0];
+    if (!newMedia) throw new Error("Failed to attach media to product");
+    const newId = newMedia.id;
 
-  return abandoned;
+    // Point any variant that used the original image at the new one, so the
+    // storefront never shows a blank/broken variant swatch. Budget:
+    // 1 + variants(2 + 100 × 4) ≈ 403.
+    try {
+      const varRes = await admin.graphql(
+        `#graphql
+          query VariantMedia($id: ID!) {
+            product(id: $id) {
+              variants(first: 100) { nodes { id media(first: 1) { nodes { id } } } }
+            }
+          }`,
+        { variables: { id: productId } }
+      );
+      const varJson = await varRes.json();
+      const variantMedia = (varJson.data?.product?.variants?.nodes || [])
+        .filter((v) => v.media?.nodes?.[0]?.id === oldMediaId)
+        .map((v) => ({ variantId: v.id, mediaIds: [newId] }));
+      if (variantMedia.length > 0) {
+        const res = await admin.graphql(
+          `#graphql
+            mutation AttachVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+              productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+                userErrors { field message }
+              }
+            }`,
+          { variables: { productId, variantMedia } }
+        );
+        const json = await res.json();
+        const err = json.errors?.[0]?.message || json.data?.productVariantAppendMedia?.userErrors?.[0]?.message;
+        if (err) console.error(`[OPTIMIZE] variant media for ${productId}:`, err);
+      }
+    } catch (err) {
+      // Cosmetic relative to the swap itself — a variant keeping its old
+      // (soon-to-be-deleted) image must not abort the replacement.
+      console.error(`[OPTIMIZE] variant lookup for ${productId}:`, err?.message || err);
+    }
+
+    // Detach the original from this product only — the original file stays in
+    // Content › Files (a backup, and still intact anywhere else it's used).
+    await admin.graphql(
+      `#graphql
+        mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
+          productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+            deletedMediaIds
+            mediaUserErrors { field message }
+          }
+        }`,
+      { variables: { productId, mediaIds: [oldMediaId] } }
+    );
+
+    // The copy was appended at the end; move it back into the original's slot
+    // so order and the featured image are unaffected.
+    if (Number.isInteger(targetPosition)) {
+      try {
+        const res = await admin.graphql(
+          `#graphql
+            mutation RestoreMediaPosition($id: ID!, $moves: [MoveInput!]!) {
+              productReorderMedia(id: $id, moves: $moves) {
+                mediaUserErrors { field message }
+              }
+            }`,
+          { variables: { id: productId, moves: [{ id: newId, newPosition: String(targetPosition) }] } }
+        );
+        const json = await res.json();
+        const err = json.errors?.[0]?.message || json.data?.productReorderMedia?.mediaUserErrors?.[0]?.message;
+        if (err) console.error(`[OPTIMIZE] reorder media for ${productId}:`, err);
+      } catch (err) {
+        console.error(`[OPTIMIZE] reorder media for ${productId}:`, err?.message || err);
+      }
+    }
+
+    return newId;
+  });
 }
 
 export async function generateAIAltText(imageUrl, productTitle) {
@@ -531,8 +500,11 @@ export async function optimizeBatch(admin, productId, opts = {}) {
   const cap = Math.max(0, Math.min(BATCH_SIZE, remainingQuota));
   const batch = pending.slice(0, cap);
 
-  // Process this batch in parallel. Each result is a per-image metafield record.
-  const batchResults = (await mapLimit(batch, BATCH_CONCURRENCY, async (image) => {
+  // Process this batch in parallel. Each result is a per-image metafield
+  // record; uploadAndReplaceImage does the full swap (attach, variant
+  // reattach, detach original, restore position) for its own image, so no
+  // separate finalize pass is needed afterwards.
+  const newRecords = (await mapLimit(batch, BATCH_CONCURRENCY, async (image) => {
     try {
       const opt = await optimizeImage(image.url);
 
@@ -553,11 +525,14 @@ export async function optimizeBatch(admin, productId, opts = {}) {
         altText = await generateAIAltText(image.url, product.title);
       }
 
-      const newId = await uploadOptimizedImage(admin, opt.optimizedBuffer, altText);
+      const targetPosition = mediaOrder.indexOf(image.id);
+      const newId = await uploadAndReplaceImage(
+        admin, productId, image.id, opt.optimizedBuffer, altText,
+        { targetPosition: targetPosition >= 0 ? targetPosition : undefined }
+      );
       const key = `image_${newId.split("/").pop()}`;
       return {
         key,
-        replacement: { oldId: image.id, newId },
         record: {
           status: "optimized",
           originalSizeMB: opt.originalSizeMB,
@@ -575,18 +550,6 @@ export async function optimizeBatch(admin, productId, opts = {}) {
       return null; // failure — leave pending, don't write a metafield
     }
   })).filter(Boolean);
-
-  // Swap originals for copies in one pass, preserving order, featured image and
-  // variant images. Copies Shopify failed to process are dropped (originals kept).
-  let abandoned = new Set();
-  try {
-    abandoned = await finalizeReplacements(
-      admin, productId, batchResults.filter(r => r.replacement).map(r => r.replacement), mediaOrder
-    );
-  } catch (err) {
-    console.error(`[OPTIMIZE] finalize ${productId}:`, err?.message || err);
-  }
-  const newRecords = batchResults.filter(r => !(r.replacement && abandoned.has(r.replacement.oldId)));
 
   // Persist the per-image metafields written this batch (up to 25 per call).
   if (newRecords.length > 0) {
@@ -647,4 +610,273 @@ export async function optimizeBatch(admin, productId, opts = {}) {
       ? `Optimized "${product.title}" — ${processed}/${total} images`
       : `Optimizing "${product.title}" — ${processed}/${total} images`,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Per-image — one image per call, so the browser can show real progress     */
+/* -------------------------------------------------------------------------- */
+
+// optimizeBatch above does up to BATCH_SIZE images per call, which means a
+// product with fewer images than that is a SINGLE request: the row could only
+// jump from 0/8 to 8/8 with nothing in between, and the whole call couldn't
+// return (so the UI couldn't show anything) until every image in the batch
+// finished. These three functions move the unit of work down to one image, so
+// every response is a progress event and the browser decides how many run at
+// once.
+//
+//   listProductImages  -> what to work through, in the merchant's order
+//   optimizeOneImage   -> one image, replaced, recorded and metered
+//   finalizeProduct    -> rewrite the summary from what's actually on it now
+
+const imageKey = (mediaId) => `image_${String(mediaId).split("/").pop()}`;
+
+// Parse the per-image records on a product, keyed by short media id.
+function parseRecords(product) {
+  const byShortId = {};
+  for (const edge of product?.metafields?.edges || []) {
+    const key = edge.node.key;
+    if (!key.startsWith("image_")) continue;
+    try {
+      byShortId[key.slice("image_".length)] = JSON.parse(edge.node.value);
+    } catch { /* a malformed record just means no history */ }
+  }
+  return byShortId;
+}
+
+// The images on a product, in order, each flagged with whether it already has
+// an optimization record. Keeping the `done` flag preserves the resumable
+// behaviour optimizeBatch had: a re-run skips what is already processed.
+// `mediaOrder` (every media id, images + video/3D, in display order) travels
+// back to the browser so each optimizeImage call can restore its image's slot.
+export async function listProductImages(admin, productId) {
+  const response = await admin.graphql(
+    `#graphql
+      query ProductImagesForRun($id: ID!) {
+        product(id: $id) {
+          id
+          title
+          media(first: 250) {
+            edges { node { id ... on MediaImage { image { url altText } } } }
+          }
+          metafields(first: 250, namespace: "image_optimization") {
+            edges { node { key value } }
+          }
+        }
+      }`,
+    { variables: { id: productId } }
+  );
+  const data = await response.json();
+  const product = data.data?.product;
+  if (!product) return null;
+
+  const records = parseRecords(product);
+  const mediaOrder = (product.media?.edges || []).map(e => e.node?.id).filter(Boolean);
+  const images = (product.media?.edges || [])
+    .map(e => e.node)
+    .filter(n => n && n.image && n.image.url)
+    .map(n => ({
+      id: n.id,
+      url: n.image.url,
+      altText: n.image.altText || "",
+      done: !!records[n.id.split("/").pop()],
+    }));
+
+  return { id: product.id, title: product.title, images, mediaOrder };
+}
+
+// Optimize exactly one image and replace it on the product.
+//
+// Returns a result object rather than throwing, so one bad image never takes
+// down the rest of a run. `mediaOrder`, echoed back by the browser from
+// listProductImages, lets the replacement land back in this image's original
+// slot instead of at the end of the media list.
+export async function optimizeOneImage({ admin, productId, imageId, shop, plan, genAlt = true, mediaOrder = [] }) {
+  // One query for everything this image needs. The URL and alt text come from
+  // Shopify, never from the browser, and the previous record carries the TRUE
+  // original size forward so re-optimizing does not report ~0 saving.
+  const key = imageKey(imageId);
+  const response = await admin.graphql(
+    `#graphql
+      query OneImageContext($imageId: ID!, $productId: ID!, $key: String!) {
+        node(id: $imageId) {
+          ... on MediaImage { id image { url altText } }
+        }
+        product(id: $productId) {
+          id
+          title
+          metafield(namespace: "image_optimization", key: $key) { value }
+        }
+      }`,
+    { variables: { imageId, productId, key } }
+  );
+  const data = await response.json();
+  const node = data.data?.node;
+  const product = data.data?.product;
+
+  if (!node?.image?.url || !product) {
+    return { success: false, imageId, error: "That image is no longer on the product." };
+  }
+
+  const imageUrl = node.image.url;
+  const currentAlt = node.image.altText || "";
+
+  let previousOriginalMB = 0;
+  if (product.metafield?.value) {
+    try {
+      previousOriginalMB = Number(JSON.parse(product.metafield.value).originalSizeMB) || 0;
+    } catch { /* unreadable record - nothing to carry forward */ }
+  }
+
+  const reserved = await reserveImages(shop, plan, 1);
+  if (!reserved.allowed) {
+    return {
+      success: false,
+      imageId,
+      // Flagged so the browser stops the run instead of asking for every
+      // remaining image and collecting the same refusal each time.
+      quotaExceeded: true,
+      error: "Monthly image credits used.",
+    };
+  }
+
+  let spent = false;
+
+  try {
+    const opt = await optimizeImage(imageUrl);
+    const trueOriginalMB = Math.max(previousOriginalMB, opt.originalSizeMB);
+
+    // Not worth replacing: re-encoding an already-tiny image can grow it, and
+    // a couple of kilobytes is not worth burning a credit, swapping the
+    // merchant file and invalidating its CDN url. Recorded so it is not
+    // retried.
+    if (opt.optimizedSizeMB >= opt.originalSizeMB) {
+      await writeImageRecord(admin, productId, key, {
+        status: "skipped",
+        originalSizeMB: trueOriginalMB,
+        optimizedSizeMB: opt.originalSizeMB,
+        compressionRate: 0,
+        optimizedAt: new Date().toISOString(),
+      });
+      return {
+        success: true,
+        imageId,
+        newImageId: imageId,
+        skipped: true,
+        originalSizeMB: trueOriginalMB,
+        optimizedSizeMB: opt.originalSizeMB,
+        compressionRate: 0,
+      };
+    }
+
+    // Auto alt text is a Starter+ feature; genAlt=false keeps the existing alt.
+    let altText = currentAlt;
+    if (genAlt && (!altText || altText.length < 10)) {
+      altText = await generateAIAltText(imageUrl, product.title);
+    }
+
+    const targetPosition = mediaOrder.indexOf(imageId);
+    const newImageId = await uploadAndReplaceImage(
+      admin, productId, imageId, opt.optimizedBuffer, altText,
+      { targetPosition: targetPosition >= 0 ? targetPosition : undefined }
+    );
+
+    // The optimized copy is attached, so the credit is genuinely spent from
+    // here even if the bookkeeping below misbehaves.
+    spent = true;
+
+    const compressionRate = trueOriginalMB > 0
+      ? Math.round(((trueOriginalMB - opt.optimizedSizeMB) / trueOriginalMB) * 100)
+      : opt.compressionRate;
+
+    await writeImageRecord(admin, productId, imageKey(newImageId), {
+      status: "optimized",
+      originalSizeMB: trueOriginalMB,
+      optimizedSizeMB: opt.optimizedSizeMB,
+      compressionRate,
+      altText,
+      optimizedAt: new Date().toISOString(),
+      originalImageId: imageId,
+      newImageId,
+    });
+
+    return {
+      success: true,
+      imageId,
+      newImageId,
+      skipped: false,
+      originalSizeMB: trueOriginalMB,
+      optimizedSizeMB: opt.optimizedSizeMB,
+      savedMB: Math.max(trueOriginalMB - opt.optimizedSizeMB, 0),
+      compressionRate,
+      altText,
+    };
+  } catch (err) {
+    const detail = err?.graphQLErrors?.[0]?.message || err?.message || "optimize failed";
+    console.error(`[OPTIMIZE] ${imageId}:`, detail);
+    return { success: false, imageId, error: detail };
+  } finally {
+    // Nothing replaced means nothing consumed — a skipped or failed image is
+    // free, which is what keeps re-running the optimizer safe.
+    if (!spent) await refundImages(shop, 1);
+  }
+}
+
+async function writeImageRecord(admin, productId, key, record) {
+  await admin.graphql(
+    `#graphql
+      mutation SetImageRecord($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) { userErrors { field message } }
+      }`,
+    {
+      variables: {
+        metafields: [{
+          ownerId: productId,
+          namespace: "image_optimization",
+          key,
+          type: "json",
+          value: JSON.stringify(record),
+        }],
+      },
+    }
+  );
+}
+
+// Close out a product: rewrite the summary from what is actually on it now.
+// Unlike the old batch path, each image already restored its own position
+// during optimizeOneImage, so there is no order to fix here — just the totals.
+export async function finalizeProduct(admin, productId) {
+  const response = await admin.graphql(
+    `#graphql
+      query ProductRunState($id: ID!) {
+        product(id: $id) {
+          id
+          media(first: 250) {
+            edges { node { ... on MediaImage { id } } }
+          }
+          metafields(first: 250, namespace: "image_optimization") {
+            edges { node { key value } }
+          }
+        }
+      }`,
+    { variables: { id: productId } }
+  );
+  const data = await response.json();
+  const product = data.data?.product;
+  if (!product) return null;
+
+  const currentIds = (product.media?.edges || [])
+    .map(e => e.node)
+    .filter(n => n && n.id)
+    .map(n => n.id);
+
+  // Only records for an image STILL on the product count. Records left behind
+  // by replaced images would otherwise be counted again, inflating both the
+  // processed count and the reported savings.
+  const records = parseRecords(product);
+  const live = currentIds
+    .map(id => records[id.split("/").pop()])
+    .filter(Boolean);
+
+  const totals = await writeSummary(admin, productId, currentIds.length, live);
+  return { ...totals, totalImages: currentIds.length };
 }

@@ -45,3 +45,41 @@ export async function getRemaining(shop, plan) {
   const { imagesUsed } = await getUsage(shop);
   return Math.max(0, quota - imagesUsed);
 }
+
+// Atomically reserve `n` images against this shop's monthly quota BEFORE doing
+// the work. The per-image optimize API checks-and-increments per image rather
+// than metering a whole batch at the end, so two images in flight on the same
+// shop must not both see headroom that only exists once — a transaction makes
+// the check and the increment indivisible.
+export async function reserveImages(shop, plan, n = 1) {
+  const quota = (plan || FREE_PLAN).monthlyImages;
+  const period = currentPeriod();
+  return db.$transaction(async (tx) => {
+    const row = await tx.usageCounter.upsert({
+      where: { shop_period: { shop, period } },
+      create: { shop, period, imagesUsed: 0 },
+      update: {},
+    });
+    if (row.imagesUsed + n > quota) {
+      return { allowed: false, remaining: Math.max(0, quota - row.imagesUsed) };
+    }
+    const updated = await tx.usageCounter.update({
+      where: { shop_period: { shop, period } },
+      data: { imagesUsed: { increment: n } },
+    });
+    return { allowed: true, remaining: Math.max(0, quota - updated.imagesUsed) };
+  });
+}
+
+// Give back `n` reserved images that were never actually spent (the image was
+// skipped as not-worth-replacing, or the optimize attempt failed).
+export async function refundImages(shop, n = 1) {
+  if (!n || n <= 0) return;
+  const period = currentPeriod();
+  try {
+    await db.usageCounter.update({
+      where: { shop_period: { shop, period } },
+      data: { imagesUsed: { decrement: n } },
+    });
+  } catch { /* row missing — nothing to refund */ }
+}
