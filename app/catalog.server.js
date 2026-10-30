@@ -9,6 +9,8 @@
 // (MAX_MEDIA_PER_PRODUCT); the optimizer itself (optimize.server.js) still
 // processes all of a product's images, since it queries one product at a time.
 
+import { measureSizesMB } from './optimize.server';
+
 export const MAX_MEDIA_PER_PRODUCT = 40;
 
 // Safety cap so a pathologically large catalog can't make a loader run forever.
@@ -50,5 +52,135 @@ export function parseSummary(product) {
     return JSON.parse(product.summary.value);
   } catch {
     return null;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The optimizer page's catalog                                              */
+/* -------------------------------------------------------------------------- */
+
+// Budget (Shopify caps a query at 1,000 requested points): per product ≈
+// 1 + featuredMedia 3 + media(2 + 40×2) + summary 1 = 87, × 10 products ≈ 875.
+const PRODUCTS_QUERY = `#graphql
+  query OptimizerProducts($cursor: String) {
+    products(first: 10, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        title
+        handle
+        status
+        featuredMedia { preview { image { url } } }
+        media(first: ${MAX_MEDIA_PER_PRODUCT}) {
+          nodes { ... on MediaImage { id alt image { url } } }
+        }
+        summary: metafield(namespace: "image_optimization", key: "optimization_summary") { value }
+      }
+    }
+  }
+`;
+
+export const EMPTY_STATS = {
+  total: 0,
+  needsOptimization: 0,
+  optimized: 0,
+  totalImages: 0,
+  totalSizeMB: 0,
+  potentialSavingsMB: 0,
+};
+
+// Builds the full product list the optimizer page renders. This is the
+// expensive half of that page — one Shopify request per 10 products,
+// sequential because pagination is cursor-based, plus a HEAD per image that
+// has never been measured. It lives behind /api/catalog so the page can render
+// first and ask for it afterwards; awaiting it inside the page loader made
+// opening the optimizer look dead for the whole fetch.
+//
+// Never rejects: a failure comes back as { error } so the page shows a banner
+// instead of an error boundary.
+export async function buildCatalog(admin) {
+  try {
+    const { products } = await fetchAllProducts(admin, PRODUCTS_QUERY);
+
+    // Build a flat list of images we need to measure (only for products that
+    // have never been optimized — optimized products carry totals in their
+    // summary metafield). measureSizesMB serves these from the ImageSize cache
+    // and only goes to the network for urls it has never seen, so the HEAD
+    // requests are paid once per image, not on every render.
+    const measureTasks = [];
+    for (const product of products) {
+      if (parseSummary(product)) continue;
+      for (const img of imageNodes(product)) {
+        measureTasks.push({ productId: product.id, url: img.image.url });
+      }
+    }
+    const sizeByUrl = await measureSizesMB(measureTasks.map(t => t.url));
+    const measuredByProduct = {};
+    for (const t of measureTasks) {
+      measuredByProduct[t.productId] = (measuredByProduct[t.productId] || 0) + (sizeByUrl.get(t.url) || 0);
+    }
+
+    const processedProducts = products.map((product) => {
+      const images = imageNodes(product);
+      // The optimizer writes the summary on every batch, so a product without
+      // one has not been processed yet. Its totalImages is the full count —
+      // more accurate than the listing, which is capped at MAX_MEDIA_PER_PRODUCT.
+      const summary = parseSummary(product);
+      const imageCount = Math.max(images.length, summary?.totalImages || 0);
+      const imagesWithAlt = images.filter(img => img.alt && img.alt.length > 10).length;
+      let processed = summary ? (summary.optimizedImages || 0) : 0;
+      processed = Math.min(processed, imageCount);
+
+      let totalOriginalSize;
+      let totalOptimizedSize;
+      if (summary) {
+        totalOriginalSize = summary.totalOriginalSizeMB || 0;
+        totalOptimizedSize = summary.totalOptimizedSizeMB || 0;
+      } else {
+        totalOriginalSize = measuredByProduct[product.id] || 0;
+        totalOptimizedSize = totalOriginalSize; // nothing saved yet
+      }
+
+      const score = imageCount > 0 ? Math.round((processed / imageCount) * 100) : 0;
+      const sizeSavedMB = Math.max(0, totalOriginalSize - totalOptimizedSize);
+      const compressionRate = totalOriginalSize > 0
+        ? Math.max(0, Math.round((sizeSavedMB / totalOriginalSize) * 100))
+        : 0;
+
+      return {
+        id: product.id,
+        title: product.title,
+        handle: product.handle,
+        status: product.status,
+        imageCount,
+        imagesWithAlt,
+        optimizedImages: processed,
+        score,
+        totalOriginalSizeMB: totalOriginalSize,
+        totalOptimizedSizeMB: totalOptimizedSize,
+        sizeSavedMB,
+        compressionRate,
+        featuredImageUrl: product.featuredMedia?.preview?.image?.url || images[0]?.image.url,
+        needsOptimization: score < 100,
+      };
+    });
+
+    // Return ALL products; filtering/sorting happens instantly on the client
+    // from this list, so changing a filter never re-runs this (heavy) fetch.
+    return {
+      products: processedProducts,
+      stats: {
+        total: processedProducts.length,
+        needsOptimization: processedProducts.filter(p => p.needsOptimization).length,
+        optimized: processedProducts.filter(p => !p.needsOptimization).length,
+        totalImages: processedProducts.reduce((s, p) => s + p.imageCount, 0),
+        totalSizeMB: processedProducts.reduce((s, p) => s + p.totalOriginalSizeMB, 0),
+        potentialSavingsMB: processedProducts.reduce((s, p) => s + p.sizeSavedMB, 0),
+      },
+      error: null,
+    };
+  } catch (error) {
+    console.error('[CATALOG] Error loading products:', error);
+    return { products: [], stats: EMPTY_STATS, error: 'Failed to load products' };
   }
 }
