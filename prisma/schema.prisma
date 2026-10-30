@@ -44,3 +44,12 @@ model ShopSettings {
   shop         String  @id
   autoOptimize Boolean @default(false)
 }
+
+// Measured size of an image URL (HEAD content-length). A Shopify CDN url
+// changes whenever its bytes change, so a cached row is always correct and
+// never needs invalidating.
+model ImageSize {
+  url       String   @id
+  bytes     Int
+  createdAt DateTime @default(now())
+}

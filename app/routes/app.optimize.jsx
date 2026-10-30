@@ -7,7 +7,7 @@ import { getBillingStateCached } from '../billing.server';
 import { getUsage, getRemaining } from '../usage.server';
 import { entitled } from '../plans.server';
 import db from '../db.server';
-import { mapLimit, headSizeMB, optimizeBatch } from '../optimize.server';
+import { measureSizesMB, optimizeBatch } from '../optimize.server';
 import { Meter, RisingBars } from '../components/Brand';
 import { fetchAllProducts, imageNodes, parseSummary, MAX_MEDIA_PER_PRODUCT } from '../catalog.server';
 import {
@@ -53,6 +53,16 @@ const PRODUCTS_QUERY = `#graphql
 /*  Loader                                                                    */
 /* -------------------------------------------------------------------------- */
 
+// React Router re-runs this route's loader after EVERY fetcher action by
+// default, so each ~8s optimize batch was followed by a 20-45s full-catalog
+// reload. The UI tracks per-product progress client-side (liveProgress) and
+// explicitly revalidates once the whole queue drains, so the per-batch
+// revalidations are pure waste — skip them.
+export function shouldRevalidate({ formMethod, defaultShouldRevalidate }) {
+  if (formMethod && formMethod.toUpperCase() !== 'GET') return false;
+  return defaultShouldRevalidate;
+}
+
 export async function loader({ request }) {
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -84,8 +94,9 @@ export async function loader({ request }) {
 
     // Build a flat list of images we need to measure (only for products that
     // have never been optimized — optimized products carry totals in their
-    // summary metafield). Measured with bounded concurrency + IPv4 so the page
-    // loads in a few seconds instead of stalling on per-image connect timeouts.
+    // summary metafield). measureSizesMB serves these from the ImageSize cache
+    // and only goes to the network for urls it has never seen, so the HEAD
+    // requests are paid once per image, not on every render.
     const measureTasks = [];
     for (const product of products) {
       if (parseSummary(product)) continue;
@@ -93,11 +104,11 @@ export async function loader({ request }) {
         measureTasks.push({ productId: product.id, url: img.image.url });
       }
     }
-    const measuredSizes = await mapLimit(measureTasks, 24, t => headSizeMB(t.url));
+    const sizeByUrl = await measureSizesMB(measureTasks.map(t => t.url));
     const measuredByProduct = {};
-    measureTasks.forEach((t, i) => {
-      measuredByProduct[t.productId] = (measuredByProduct[t.productId] || 0) + (measuredSizes[i] || 0);
-    });
+    for (const t of measureTasks) {
+      measuredByProduct[t.productId] = (measuredByProduct[t.productId] || 0) + (sizeByUrl.get(t.url) || 0);
+    }
 
     const processedProducts = products.map((product) => {
       const images = imageNodes(product);

@@ -12,6 +12,7 @@
 import sharp from "sharp";
 import { setDefaultResultOrder } from "node:dns";
 import { incrementUsage } from "./usage.server";
+import db from "./db.server";
 
 /* -------------------------------------------------------------------------- */
 /*  Networking helpers                                                        */
@@ -55,16 +56,64 @@ export async function mapLimit(items, limit, fn) {
   return results;
 }
 
-// Cheaply measure an image's size in MB via a HEAD request (no body download).
-export async function headSizeMB(url) {
+// Cheaply measure an image's size in bytes via a HEAD request (no body download).
+export async function headSizeBytes(url) {
   try {
     const res = await timedFetch(url, { method: "HEAD" }, 8000);
     if (!res.ok) return 0;
     const cl = res.headers.get("content-length");
-    return cl ? parseInt(cl, 10) / (1024 * 1024) : 0;
+    return cl ? parseInt(cl, 10) : 0;
   } catch {
     return 0;
   }
+}
+
+export async function headSizeMB(url) {
+  return (await headSizeBytes(url)) / (1024 * 1024);
+}
+
+// Resolve many image sizes at once, in MB, keyed by url.
+//
+// This replaces a HEAD request per image on every product-list render. Sizes are
+// read from the ImageSize cache first and only the misses go over the network;
+// because a Shopify CDN url changes whenever its bytes change, a hit is always
+// correct. The cache write is best-effort — if the table isn't migrated yet the
+// whole thing silently degrades to the old measure-everything behaviour.
+export async function measureSizesMB(urls, concurrency = 24) {
+  const unique = [...new Set(urls.filter(Boolean))];
+  const bytesByUrl = new Map();
+  if (unique.length === 0) return bytesByUrl;
+
+  // Chunked so a large catalog can't build a single enormous IN (...) query.
+  for (let i = 0; i < unique.length; i += 500) {
+    const chunk = unique.slice(i, i + 500);
+    try {
+      const rows = await db.imageSize.findMany({ where: { url: { in: chunk } } });
+      for (const row of rows) bytesByUrl.set(row.url, row.bytes);
+    } catch {
+      break; // table unavailable — measure everything below
+    }
+  }
+
+  const missing = unique.filter((u) => !bytesByUrl.has(u));
+  if (missing.length > 0) {
+    const measured = await mapLimit(missing, concurrency, headSizeBytes);
+    const rows = [];
+    missing.forEach((url, i) => {
+      const bytes = measured[i] || 0;
+      bytesByUrl.set(url, bytes);
+      if (bytes > 0) rows.push({ url, bytes });
+    });
+    if (rows.length > 0) {
+      try {
+        await db.imageSize.createMany({ data: rows, skipDuplicates: true });
+      } catch { /* caching is an optimization, never a failure path */ }
+    }
+  }
+
+  const mbByUrl = new Map();
+  for (const [url, bytes] of bytesByUrl) mbByUrl.set(url, bytes / (1024 * 1024));
+  return mbByUrl;
 }
 
 export const BATCH_SIZE = 6;          // images optimized per batch call
