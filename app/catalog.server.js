@@ -59,13 +59,34 @@ export function parseSummary(product) {
 /*  The optimizer page's catalog                                              */
 /* -------------------------------------------------------------------------- */
 
-// The catalog lists 20 images per product instead of MAX_MEDIA_PER_PRODUCT (40)
-// so products can page at 20 per request instead of 10 — the pagination is
-// sequential, so page size is the whole latency of this fetch. The listing cap
-// only affects the shown alt-text tally and the pre-optimization size estimate
-// of 20+-image products; the optimizer itself still processes every image, and
-// once a product has a summary its real totals replace the estimate.
-// Budget (Shopify caps a query at 1,000 requested points): per product ≈
+// Pagination is sequential (cursor-based), so page size IS the latency of this
+// fetch. The large query fetches 50 products × 250 images per request — a
+// whole small store in one round-trip, which is what makes the sibling
+// imageAiMax app feel instant, and it demonstrably passes Shopify's validation
+// in production there. Its *requested* cost is far above the documented
+// 1,000-point single-query limit, though, so if Shopify ever starts enforcing
+// that against this app, buildCatalog falls back to the small paged query
+// below instead of failing the page.
+const PRODUCTS_QUERY_LARGE = `#graphql
+  query OptimizerProducts($cursor: String) {
+    products(first: 50, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        title
+        handle
+        status
+        featuredMedia { preview { image { url } } }
+        media(first: 250) {
+          nodes { ... on MediaImage { id alt image { url } } }
+        }
+        summary: metafield(namespace: "image_optimization", key: "optimization_summary") { value }
+      }
+    }
+  }
+`;
+
+// Fallback within the documented budget: per product ≈
 // 1 + featuredMedia 3 + media(2 + 20×2) + summary 1 = 47, × 20 products ≈ 942.
 const OPTIMIZER_MEDIA_PER_PRODUCT = 20;
 const PRODUCTS_QUERY = `#graphql
@@ -107,7 +128,16 @@ export const EMPTY_STATS = {
 // instead of an error boundary.
 export async function buildCatalog(admin) {
   try {
-    const { products } = await fetchAllProducts(admin, PRODUCTS_QUERY);
+    let products;
+    try {
+      ({ products } = await fetchAllProducts(admin, PRODUCTS_QUERY_LARGE));
+    } catch (e) {
+      // Only a cost rejection falls back — anything else (auth, network,
+      // throttling) should surface as the usual failure banner.
+      if (!/cost|MAX_COST/i.test(e?.message || '')) throw e;
+      console.warn('[CATALOG] large page rejected (%s) — falling back to small pages', e.message);
+      ({ products } = await fetchAllProducts(admin, PRODUCTS_QUERY));
+    }
 
     // Build a flat list of images we need to measure (only for products that
     // have never been optimized — optimized products carry totals in their
