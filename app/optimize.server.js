@@ -205,7 +205,7 @@ function withProductMediaLock(productId, task) {
 // attaches directly to the product in its own response, so there is nothing
 // to wait for; the file still finishes encoding in the background exactly
 // like any image a merchant uploads by hand.
-export async function uploadAndReplaceImage(admin, productId, oldMediaId, optimizedBuffer, altText, { targetPosition } = {}) {
+export async function uploadAndReplaceImage(admin, productId, oldMediaId, optimizedBuffer, altText, { targetPosition, variantId } = {}) {
   const isWebP = optimizedBuffer[8] === 0x57 && optimizedBuffer[9] === 0x45;
   const mimeType = isWebP ? "image/webp" : "image/jpeg";
   const filename = `imagelift-${Date.now()}.${isWebP ? "webp" : "jpg"}`;
@@ -271,23 +271,32 @@ export async function uploadAndReplaceImage(admin, productId, oldMediaId, optimi
     const newId = newMedia.id;
 
     // Point any variant that used the original image at the new one, so the
-    // storefront never shows a blank/broken variant swatch. Budget:
-    // 1 + variants(2 + 100 × 4) ≈ 403.
+    // storefront never shows a blank/broken variant swatch.
+    //
+    // `variantId` is resolved by the CALLER when it already has the whole
+    // product in hand (listProductImages does, once per product) — passing
+    // it here skips a `variants(first: 100)` query that used to run again on
+    // every single image, inside this function's per-product lock, and was
+    // one of the larger chunks of the few seconds each image took. A caller
+    // that doesn't know it yet (optimizeBatch, below) can still omit the
+    // option and get the original per-call lookup.
     try {
-      const varRes = await admin.graphql(
-        `#graphql
-          query VariantMedia($id: ID!) {
-            product(id: $id) {
-              variants(first: 100) { nodes { id media(first: 1) { nodes { id } } } }
-            }
-          }`,
-        { variables: { id: productId } }
-      );
-      const varJson = await varRes.json();
-      const variantMedia = (varJson.data?.product?.variants?.nodes || [])
-        .filter((v) => v.media?.nodes?.[0]?.id === oldMediaId)
-        .map((v) => ({ variantId: v.id, mediaIds: [newId] }));
-      if (variantMedia.length > 0) {
+      let resolvedVariantId = variantId;
+      if (resolvedVariantId === undefined) {
+        const varRes = await admin.graphql(
+          `#graphql
+            query VariantMedia($id: ID!) {
+              product(id: $id) {
+                variants(first: 100) { nodes { id media(first: 1) { nodes { id } } } }
+              }
+            }`,
+          { variables: { id: productId } }
+        );
+        const varJson = await varRes.json();
+        resolvedVariantId = (varJson.data?.product?.variants?.nodes || [])
+          .find((v) => v.media?.nodes?.[0]?.id === oldMediaId)?.id || null;
+      }
+      if (resolvedVariantId) {
         const res = await admin.graphql(
           `#graphql
             mutation AttachVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
@@ -295,7 +304,7 @@ export async function uploadAndReplaceImage(admin, productId, oldMediaId, optimi
                 userErrors { field message }
               }
             }`,
-          { variables: { productId, variantMedia } }
+          { variables: { productId, variantMedia: [{ variantId: resolvedVariantId, mediaIds: [newId] }] } }
         );
         const json = await res.json();
         const err = json.errors?.[0]?.message || json.data?.productVariantAppendMedia?.userErrors?.[0]?.message;
@@ -646,8 +655,14 @@ function parseRecords(product) {
 // The images on a product, in order, each flagged with whether it already has
 // an optimization record. Keeping the `done` flag preserves the resumable
 // behaviour optimizeBatch had: a re-run skips what is already processed.
-// `mediaOrder` (every media id, images + video/3D, in display order) travels
-// back to the browser so each optimizeImage call can restore its image's slot.
+//
+// `variantId` is resolved HERE, once per product, from a `variants(first:
+// 100)` query included in the same request — not from a separate query per
+// image. optimizeOneImage used to re-run that query itself on every single
+// image it processed (inside the per-product media lock, on the critical
+// path), which was one of the larger chunks of the several seconds each
+// image took; most products don't even have per-variant images, so almost
+// every one of those repeated queries came back empty.
 export async function listProductImages(admin, productId) {
   const response = await admin.graphql(
     `#graphql
@@ -661,6 +676,9 @@ export async function listProductImages(admin, productId) {
           metafields(first: 250, namespace: "image_optimization") {
             edges { node { key value } }
           }
+          variants(first: 100) {
+            nodes { id media(first: 1) { nodes { id } } }
+          }
         }
       }`,
     { variables: { id: productId } }
@@ -670,7 +688,11 @@ export async function listProductImages(admin, productId) {
   if (!product) return null;
 
   const records = parseRecords(product);
-  const mediaOrder = (product.media?.edges || []).map(e => e.node?.id).filter(Boolean);
+  const variantIdByMediaId = {};
+  for (const v of product.variants?.nodes || []) {
+    const mediaId = v.media?.nodes?.[0]?.id;
+    if (mediaId) variantIdByMediaId[mediaId] = v.id;
+  }
   const images = (product.media?.edges || [])
     .map(e => e.node)
     .filter(n => n && n.image && n.image.url)
@@ -679,18 +701,21 @@ export async function listProductImages(admin, productId) {
       url: n.image.url,
       altText: n.image.altText || "",
       done: !!records[n.id.split("/").pop()],
+      variantId: variantIdByMediaId[n.id] || null,
     }));
 
-  return { id: product.id, title: product.title, images, mediaOrder };
+  return { id: product.id, title: product.title, images };
 }
 
 // Optimize exactly one image and replace it on the product.
 //
 // Returns a result object rather than throwing, so one bad image never takes
-// down the rest of a run. `mediaOrder`, echoed back by the browser from
-// listProductImages, lets the replacement land back in this image's original
-// slot instead of at the end of the media list.
-export async function optimizeOneImage({ admin, productId, imageId, shop, plan, genAlt = true, mediaOrder = [] }) {
+// down the rest of a run. Unlike optimizeBatch, the replacement is appended
+// to the end of the media list rather than restored to its original slot —
+// finalizeProduct restores every image's position in ONE mutation at the end
+// of the whole product's run instead of paying a reorder round trip on every
+// image (the browser tracks the running order and sends it to finalize).
+export async function optimizeOneImage({ admin, productId, imageId, shop, plan, genAlt = true, variantId = null }) {
   // One query for everything this image needs. The URL and alt text come from
   // Shopify, never from the browser, and the previous record carries the TRUE
   // original size forward so re-optimizing does not report ~0 saving.
@@ -774,10 +799,9 @@ export async function optimizeOneImage({ admin, productId, imageId, shop, plan, 
       altText = await generateAIAltText(imageUrl, product.title);
     }
 
-    const targetPosition = mediaOrder.indexOf(imageId);
     const newImageId = await uploadAndReplaceImage(
       admin, productId, imageId, opt.optimizedBuffer, altText,
-      { targetPosition: targetPosition >= 0 ? targetPosition : undefined }
+      { variantId }
     );
 
     // The optimized copy is attached, so the credit is genuinely spent from
@@ -841,10 +865,19 @@ async function writeImageRecord(admin, productId, key, record) {
   );
 }
 
-// Close out a product: rewrite the summary from what is actually on it now.
-// Unlike the old batch path, each image already restored its own position
-// during optimizeOneImage, so there is no order to fix here — just the totals.
-export async function finalizeProduct(admin, productId) {
+// Close out a product: rewrite the summary from what is actually on it now,
+// and put the image order back.
+//
+// Every image optimizeOneImage replaced during the run was appended to the
+// end of the media list rather than restored to its own slot — that restore
+// used to be a productReorderMedia call PER IMAGE, inside the same lock as
+// the rest of that image's mutations, and was one of the costliest parts of
+// the few seconds each image took. Doing it once here, for the whole
+// product, costs one reorder call total instead of one per image.
+// `desiredOrder` is the run's images in the merchant's original order, with
+// each entry updated to its new id as that image was replaced — the browser
+// builds this as it goes and sends it only now, at the end.
+export async function finalizeProduct(admin, productId, desiredOrder = []) {
   const response = await admin.graphql(
     `#graphql
       query ProductRunState($id: ID!) {
@@ -878,5 +911,30 @@ export async function finalizeProduct(admin, productId) {
     .filter(Boolean);
 
   const totals = await writeSummary(admin, productId, currentIds.length, live);
+
+  // Unknown ids make the mutation fail outright, so only ids still present
+  // are moved, and anything the caller didn't mention (video, 3D, or an image
+  // the run never reached) is appended rather than lost.
+  const wanted = desiredOrder.filter((id) => currentIds.includes(id));
+  const ordered = [...wanted, ...currentIds.filter((id) => !wanted.includes(id))];
+  const changed = ordered.some((id, i) => id !== currentIds[i]);
+
+  if (changed && ordered.length > 1) {
+    try {
+      await admin.graphql(
+        `#graphql
+          mutation ReorderMedia($id: ID!, $moves: [MoveInput!]!) {
+            productReorderMedia(id: $id, moves: $moves) {
+              mediaUserErrors { field message }
+            }
+          }`,
+        { variables: { id: productId, moves: ordered.map((id, i) => ({ id, newPosition: String(i) })) } }
+      );
+    } catch (err) {
+      // Cosmetic. A failed reorder must not fail a successful optimization.
+      console.error("[OPTIMIZE] reorder failed (non-fatal):", err?.message || err);
+    }
+  }
+
   return { ...totals, totalImages: currentIds.length };
 }

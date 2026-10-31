@@ -291,8 +291,14 @@ export default function ProductOptimization() {
         continue;
       }
 
-      const mediaOrderJson = JSON.stringify(listing.mediaOrder || []);
-      const todo = listing.images.filter((img) => !img.done);
+      // The id each slot ends up holding, so the merchant's image order can be
+      // put back at the end: a replacement is appended to the end of the
+      // product's media (see uploadAndReplaceImage), and with several images
+      // in flight they no longer finish in the order they started.
+      const finalIds = listing.images.map((img) => img.id);
+      const todo = listing.images
+        .map((img, index) => ({ ...img, index }))
+        .filter((img) => !img.done);
       const base = products.find((p) => p.id === productId);
 
       let productOptimized = listing.images.length - todo.length;
@@ -326,7 +332,7 @@ export default function ProductOptimization() {
             intent: 'optimizeImage',
             productId,
             imageId: image.id,
-            mediaOrder: mediaOrderJson,
+            variantId: image.variantId || '',
           });
         } catch (err) {
           result = { success: false, error: err.message };
@@ -340,6 +346,7 @@ export default function ProductOptimization() {
         }
 
         if (result.success) {
+          finalIds[image.index] = result.newImageId || image.id;
           productOptimized += 1;
           totalOptimized += 1;
           if (!result.skipped) {
@@ -357,9 +364,16 @@ export default function ProductOptimization() {
       });
 
       // Rewrite the summary from what's actually on the product now, even for
-      // a partial product — the stored numbers should describe the real state.
+      // a partial product — the stored numbers should describe the real
+      // state. This is also where the image order gets restored (see
+      // finalizeProduct) — one reorder call for the whole product instead of
+      // one per image.
       try {
-        const { summary } = await callApi({ intent: 'finalize', productId });
+        const { summary } = await callApi({
+          intent: 'finalize',
+          productId,
+          order: JSON.stringify(finalIds),
+        });
         if (summary) {
           setLiveProgress((prev) => ({
             ...prev,

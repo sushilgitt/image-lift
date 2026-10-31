@@ -58,11 +58,12 @@ export async function action({ request }) {
       if (!imageId) {
         return json({ success: false, error: 'No image was given.' }, 400);
       }
-      let mediaOrder = [];
-      try {
-        const raw = formData.get('mediaOrder');
-        if (raw) mediaOrder = JSON.parse(raw);
-      } catch { /* order is cosmetic — a bad value just skips repositioning */ }
+      // '' means "this image has no variant" (listProductImages resolved it
+      // once for the whole product) — distinct from omitting the field,
+      // which would make optimizeOneImage fall back to its own per-call
+      // lookup.
+      const variantIdRaw = formData.get('variantId');
+      const variantId = variantIdRaw ? String(variantIdRaw) : null;
 
       // Already cached per shop, so a per-image request doesn't add a billing
       // round-trip.
@@ -75,13 +76,20 @@ export async function action({ request }) {
           shop: session.shop,
           plan,
           genAlt: entitled(plan, 'altText'),
-          mediaOrder: Array.isArray(mediaOrder) ? mediaOrder : [],
+          variantId,
         })
       );
     }
 
     if (intent === 'finalize') {
-      const summary = await finalizeProduct(admin, productId);
+      let order = [];
+      try {
+        const raw = formData.get('order');
+        if (raw) order = JSON.parse(raw);
+      } catch {
+        // The order is cosmetic — a bad value just means "leave it as it is".
+      }
+      const summary = await finalizeProduct(admin, productId, Array.isArray(order) ? order : []);
       return json({ success: true, summary });
     }
 
