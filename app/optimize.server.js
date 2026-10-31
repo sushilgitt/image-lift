@@ -297,17 +297,30 @@ export async function uploadAndReplaceImage(admin, productId, oldMediaId, optimi
           .find((v) => v.media?.nodes?.[0]?.id === oldMediaId)?.id || null;
       }
       if (resolvedVariantId) {
-        const res = await admin.graphql(
-          `#graphql
-            mutation AttachVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
-              productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
-                userErrors { field message }
-              }
-            }`,
-          { variables: { productId, variantMedia: [{ variantId: resolvedVariantId, mediaIds: [newId] }] } }
-        );
-        const json = await res.json();
-        const err = json.errors?.[0]?.message || json.data?.productVariantAppendMedia?.userErrors?.[0]?.message;
+        // productCreateMedia (above) attaches the media to the PRODUCT
+        // instantly, but the file itself is still processing for a moment —
+        // productVariantAppendMedia specifically rejects a non-ready media
+        // with "Non-ready media cannot be attached to variants.". This is
+        // rare (only products with a per-variant image hit it at all) and
+        // short-lived, so a few quick retries cost far less than the old
+        // blanket 30s poll that ran before every image regardless of whether
+        // it had a variant.
+        let err;
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          const res = await admin.graphql(
+            `#graphql
+              mutation AttachVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+                productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+                  userErrors { field message }
+                }
+              }`,
+            { variables: { productId, variantMedia: [{ variantId: resolvedVariantId, mediaIds: [newId] }] } }
+          );
+          const json = await res.json();
+          err = json.errors?.[0]?.message || json.data?.productVariantAppendMedia?.userErrors?.[0]?.message;
+          if (!err || !/non-ready|not ready|processing/i.test(err)) break;
+          if (attempt < 5) await new Promise((r) => setTimeout(r, 1500));
+        }
         if (err) console.error(`[OPTIMIZE] variant media for ${productId}:`, err);
       }
     } catch (err) {
